@@ -120,8 +120,8 @@ if check_password():
             st.markdown("---")
 
             # --- 3. AKILLI BÜTÇE & PARETO ÖNERİ ASİSTANI ---
-            with st.expander("💡 🤖 Bütçeye Göre Akıllı Pareto Öneri Asistanı (Otomatik Senaryo Analizi)", expanded=False):
-                st.markdown("Sistem girdiğiniz bütçe sınırını **'Yeni Hedef Değer (Optimum TL + Fazla TL)'** KPI'ına göre tarayarak uygun senaryoları getirir.")
+            with st.expander("💡 🤖 Bütçeye Göre Akıllı Pareto Öneri Asistanı (Genişletilmiş Senaryo Analizi)", expanded=False):
+                st.markdown("Sistem girdiğiniz bütçe sınırını tarar. Alt limitlerden başlayıp, bütçenizi bir miktar (%2-%10) **aşmanız durumunda** kazanacağınız hizmet seviyesi fırsatlarını da listeler.")
                 
                 col_rec1, col_rec2 = st.columns([2, 1])
                 with col_rec1:
@@ -133,7 +133,7 @@ if check_password():
                 with col_rec2:
                     st.write("")
                     st.write("")
-                    run_analysis = st.button("🔍 Senaryoları Analiz Et ve Getir", use_container_width=True)
+                    run_analysis = st.button("🔍 8 Farklı Senaryoyu Analiz Et ve Getir", use_container_width=True)
 
                 if run_analysis:
                     # Hızlı Vektörel Altyapı
@@ -152,7 +152,6 @@ if check_password():
                     z_dict = {val: NormalDist().inv_cdf(val/100.0) for val in options_ui}
                     options_bos = [50, 60, 70, 80, 90, 95, 99]
                     
-                    # 99 dahil dinamik senaryo üretimi (Esneklik için fark toleransı 20'ye çıkarıldı)
                     combos = []
                     for A in options_ui:
                         for B in [x for x in options_ui if x <= A and A - x <= 20]:
@@ -178,46 +177,74 @@ if check_password():
                         target_budget = total_opt + total_fazla
                         results.append({'budget': target_budget, 'A': A, 'B': B, 'C': C, 'D': D, 'E': E, 'BOS': BOS})
 
-                    # DEĞER BAZLI (BÜTÇE HEDEFİNE GÖRE) SEÇİM ALGORİTMASI
+                    # DEĞER BAZLI + BÜTÇE AŞIMI (OVER-BUDGET) SEÇİM ALGORİTMASI
                     min_b = min([r['budget'] for r in results])
-                    max_possible_budget = max([r['budget'] for r in results])
-                    actual_target = min(analiz_butce, max_possible_budget) # Kullanıcı çok uçuk rakam girerse diye koruma
+                    max_possible = max([r['budget'] for r in results])
+                    actual_target = min(analiz_butce, max_possible)
                     
-                    # Hedef dağılım noktaları (4 numara hedefin %92'sine vuracak)
+                    # 8 Farklı Hedef Noktası Belirleme
                     target_points = [
-                        min_b,                                         # 1. Minimum
-                        min_b + (actual_target - min_b) * 0.50,        # 2. Orta-Alt
-                        min_b + (actual_target - min_b) * 0.75,        # 3. Standart
-                        min_b + (actual_target - min_b) * 0.92,        # 4. Yüksek (Hedefe çok yakın)
-                        actual_target                                  # 5. Tam Limit
+                        min_b,                                         # 1. En düşük
+                        min_b + (actual_target - min_b) * 0.40,        # 2. Ekonomik Alt
+                        min_b + (actual_target - min_b) * 0.65,        # 3. Ekonomik Üst
+                        min_b + (actual_target - min_b) * 0.85,        # 4. Yüksek Hizmet
+                        actual_target,                                 # 5. Tam Sınır (İstenen Bütçe)
+                        actual_target * 1.02,                          # 6. %2 Bütçe Aşımı
+                        actual_target * 1.05,                          # 7. %5 Bütçe Aşımı
+                        actual_target * 1.10                           # 8. %10 Bütçe Aşımı (Maksimum Fırsat)
                     ]
                     
                     selected_scenarios = []
                     seen_keys = set()
                     
-                    for tp in target_points:
-                        # Bu hedefe en yakın olanları bul
+                    for tp_idx, tp in enumerate(target_points):
+                        # %10 aşım senaryosu sistemin maksimumundan bile büyükse, zorlama
+                        if tp > max_possible:
+                            tp = max_possible
+                            
+                        # Bu hedefe en yakın olanı bul
                         sorted_by_dist = sorted(results, key=lambda x: abs(x['budget'] - tp))
                         for cand in sorted_by_dist:
                             cand_key = (cand['A'], cand['B'], cand['C'], cand['D'], cand['E'], cand['BOS'])
-                            # Aynı senaryoyu 2 kere getirme ve limiti absürt aşma
-                            if cand_key not in seen_keys and cand['budget'] <= analiz_butce * 1.01:
+                            # Her senaryonun toleransını belirle (İlk 5 bütçe altında olmalı, son 3 aşabilir)
+                            budget_constraint = (actual_target * 1.01) if tp_idx < 5 else (actual_target * 1.15)
+                            
+                            if cand_key not in seen_keys and cand['budget'] <= budget_constraint:
                                 selected_scenarios.append(cand)
                                 seen_keys.add(cand_key)
                                 break
+                                
+                    # Eğer liste 8'den az kalırsa doldur
+                    while len(selected_scenarios) < 8 and len(seen_keys) < len(results):
+                        for cand in sorted(results, key=lambda x: x['budget']):
+                            cand_key = (cand['A'], cand['B'], cand['C'], cand['D'], cand['E'], cand['BOS'])
+                            if cand_key not in seen_keys:
+                                selected_scenarios.append(cand)
+                                seen_keys.add(cand_key)
+                                break
+                                
+                    selected_scenarios = sorted(selected_scenarios, key=lambda x: x['budget'])
 
                     p_indices = [
-                        "1️⃣ Tasarruf Odaklı (Düşük)",
-                        "2️⃣ Ekonomik Dengeli",
-                        "3️⃣ Standart Optimal",
+                        "1️⃣ Tasarruf Odaklı (Min)",
+                        "2️⃣ Ekonomik Alt",
+                        "3️⃣ Ekonomik Üst",
                         "4️⃣ Yüksek Hizmet",
-                        "5️⃣ Bütçeye En Yakın Limit"
+                        "5️⃣ Bütçe Sınırı (Hedef)",
+                        "6️⃣ Bütçe Aşımı (%2 Risk)",
+                        "7️⃣ Bütçe Aşımı (%5 Risk)",
+                        "8️⃣ Max Fırsat (%10 Risk)"
                     ]
 
-                    st.markdown("#### 🎯 Analiz Edilen Örnek Pareto Hizmet Senaryoları")
-                    s_cols = st.columns(5)
+                    st.markdown("#### 🎯 Analiz Edilen 8 Farklı Pareto Hizmet Senaryosu")
                     
-                    for idx_i, scen in enumerate(selected_scenarios):
+                    # İlk 4 senaryo (Bütçe içi)
+                    st.markdown("##### 🟢 Hedef Bütçe İçi Senaryolar")
+                    row1 = st.columns(4)
+                    for idx_i in range(4):
+                        if idx_i >= len(selected_scenarios): continue
+                        scen = selected_scenarios[idx_i]
+                        
                         level_map_scen = {'A': scen['A'], 'B': scen['B'], 'C': scen['C'], 'D': scen['D'], 'E': scen['E'], 'BOŞ': scen['BOS']}
                         scen_emniyet = df['Temiz_Pareto'].map(level_map_scen).fillna(scen['BOS']) / 100.0
                         z_new_scen = scen_emniyet.apply(lambda p: NormalDist().inv_cdf(p))
@@ -228,14 +255,52 @@ if check_password():
                         scen_yeni_fazla = np.maximum(0, df['Stok TL'] - scen_yeni_hedef)
                         scen_guncel_hedef = scen_yeni_optimum.sum() + scen_yeni_fazla.sum()
                         
-                        with s_cols[idx_i]:
+                        with row1[idx_i]:
                             st.subheader(p_indices[idx_i])
                             st.markdown(f"**A:** %{scen['A']} | **B:** %{scen['B']} | **C:** %{scen['C']}<br>**D:** %{scen['D']} | **E:** %{scen['E']} | **Boş:** %{scen['BOS']}", unsafe_allow_html=True)
                             st.markdown("---")
                             st.metric("🎯 Yeni Hedef Değer", format_tr(scen_guncel_hedef), help="Yeni Optimum TL + Yeni Fazla TL")
                             st.metric("⚖️ Yeni Optimum TL", format_tr(scen_yeni_optimum.sum()))
                             st.metric("⚠️ Yeni Fazla TL", format_tr(scen_yeni_fazla.sum()))
-                            st.metric("📉 Yeni Min TL", format_tr(scen_yeni_min.sum()))
+                            
+                            if st.button(f"✅ Bu Senaryoyu Seç", key=f"btn_scen_{idx_i}"):
+                                st.session_state["level_A"], st.session_state["level_B"] = scen['A'], scen['B']
+                                st.session_state["level_C"], st.session_state["level_D"] = scen['C'], scen['D']
+                                st.session_state["level_E"], st.session_state["level_BOS"] = scen['E'], scen['BOS']
+                                st.session_state["hedef_butce"] = int(analiz_butce)
+                                st.session_state["form_submitted"] = True
+                                st.rerun()
+
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    # Son 4 senaryo (Tam Sınır ve Bütçe Aşımları)
+                    st.markdown("##### 🔴 Bütçe Limitine Yakın ve Limit Aşımı (Fırsat) Senaryoları")
+                    row2 = st.columns(4)
+                    for idx_i in range(4, 8):
+                        if idx_i >= len(selected_scenarios): continue
+                        scen = selected_scenarios[idx_i]
+                        
+                        level_map_scen = {'A': scen['A'], 'B': scen['B'], 'C': scen['C'], 'D': scen['D'], 'E': scen['E'], 'BOŞ': scen['BOS']}
+                        scen_emniyet = df['Temiz_Pareto'].map(level_map_scen).fillna(scen['BOS']) / 100.0
+                        z_new_scen = scen_emniyet.apply(lambda p: NormalDist().inv_cdf(p))
+                        
+                        scen_yeni_min = np.where(df['Emniyet Seviyesi'] <= 50, 0, df['Min TL'] * (z_new_scen / z_old_all))
+                        scen_yeni_hedef = scen_yeni_min + df['Hedef_Min_Fark']
+                        scen_yeni_optimum = (scen_yeni_min + scen_yeni_hedef) / 2.0
+                        scen_yeni_fazla = np.maximum(0, df['Stok TL'] - scen_yeni_hedef)
+                        scen_guncel_hedef = scen_yeni_optimum.sum() + scen_yeni_fazla.sum()
+                        
+                        with row2[idx_i - 4]:
+                            st.subheader(p_indices[idx_i])
+                            st.markdown(f"**A:** %{scen['A']} | **B:** %{scen['B']} | **C:** %{scen['C']}<br>**D:** %{scen['D']} | **E:** %{scen['E']} | **Boş:** %{scen['BOS']}", unsafe_allow_html=True)
+                            st.markdown("---")
+                            
+                            # Hedefi aşıyorsa kırmızı uyarı, değilse normal yeşil ok gösterimi
+                            delta_val = float(scen_guncel_hedef) - float(analiz_butce)
+                            delta_color = "inverse" if delta_val > 0 else "normal"
+                            
+                            st.metric("🎯 Yeni Hedef Değer", format_tr(scen_guncel_hedef), delta=f"{format_tr(abs(delta_val))} Fark", delta_color=delta_color, help="Yeni Optimum TL + Yeni Fazla TL")
+                            st.metric("⚖️ Yeni Optimum TL", format_tr(scen_yeni_optimum.sum()))
+                            st.metric("⚠️ Yeni Fazla TL", format_tr(scen_yeni_fazla.sum()))
                             
                             if st.button(f"✅ Bu Senaryoyu Seç", key=f"btn_scen_{idx_i}"):
                                 st.session_state["level_A"], st.session_state["level_B"] = scen['A'], scen['B']
@@ -276,7 +341,7 @@ if check_password():
                     "hedef_butce": hedef_butce_input, "form_submitted": True
                 })
 
-            # --- 5. HESAPLAMA VE SONUÇ EKRANI ---
+            # --- 5. HESAPLAMA VE SONUÇ EKRANI (TEDARİK ZİNCİRİ ÖZETİ) ---
             if st.session_state["form_submitted"]:
                 level_map = {
                     'A': st.session_state["level_A"], 'B': st.session_state["level_B"],
@@ -297,6 +362,7 @@ if check_password():
                 yeni_toplam_optimum = df['Yeni Optimum TL'].sum()
                 yeni_toplam_fazla = df['Yeni Fazla TL'].sum()
                 
+                # GÜNCEL KONTROL MATEMATİĞİ (Optimum + Fazla)
                 yeni_hedef_deger = yeni_toplam_optimum + yeni_toplam_fazla
                 yeni_stok_hedef_farki = mevcut_stok_toplam - yeni_hedef_deger
                 yeni_toplam_hedef = df['Yeni Hedef TL'].sum()
@@ -319,7 +385,7 @@ if check_password():
                 if fark_butce >= 0:
                     st.success(f"🟢 **BÜTÇE UYGUN:** Kurguladığınız **Yeni Hedef Değer ({format_tr(yeni_hedef_deger)})**, belirlediğiniz **{format_tr(aktuel_butce)}** sınırının altındadır. *(Avantaj: {format_tr(fark_butce)})*")
                 else:
-                    st.error(f"🔴 **BÜTÇE AŞILDI:** Kurguladığınız **Yeni Hedef Değer ({format_tr(yeni_hedef_deger)})**, belirlediğiniz **{format_tr(aktuel_butce)}** sınırını **{format_tr(abs(fark_butce))}** tutarında aşmaktadır! Hizmet seviyelerini düşürünüz.")
+                    st.error(f"🔴 **BÜTÇE AŞILDI (OVER-BUDGET):** Kurguladığınız **Yeni Hedef Değer ({format_tr(yeni_hedef_deger)})**, belirlediğiniz **{format_tr(aktuel_butce)}** sınırını **{format_tr(abs(fark_butce))}** tutarında aşmaktadır!")
                 
                 k1, k2, k3, k4 = st.columns(4)
                 k1.metric("Yeni Hedef TL (Sistem)", format_tr(yeni_toplam_hedef))
