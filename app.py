@@ -5,7 +5,7 @@ from statistics import NormalDist
 import io
 
 # --- SAYFA YAPILANDIRMASI VE TÜRKÇE FORMAT FONKSİYONU ---
-st.set_page_config(page_title="Ecza Deposu Stok & Bütçe Paneli", layout="wide")
+st.set_page_config(page_title="Stok & Bütçe Optimizasyon Paneli", layout="wide", initial_sidebar_state="collapsed")
 
 def format_tr(val):
     if pd.isna(val) or val == 0:
@@ -28,8 +28,8 @@ def check_password():
     if "password_correct" not in st.session_state:
         st.session_state["password_correct"] = False
     if not st.session_state["password_correct"]:
-        st.title("🔐 Ecza Deposu Stok Yönetimi - Giriş")
-        st.markdown("Devam etmek için lütfen giriş şifrenizi giriniz.")
+        st.title("🔐 Tedarik Zinciri Yönetimi - Güvenli Giriş")
+        st.markdown("Devam etmek için lütfen yönetici şifrenizi giriniz.")
         password = st.text_input("Şifre", type="password")
         if st.button("Sisteme Giriş Yap"):
             if password == "Eren12345":
@@ -41,11 +41,11 @@ def check_password():
     return True
 
 if check_password():
-    st.title("📊 Ecza Deposu Stok Seviyesi & Bütçe Optimizasyon Paneli")
-    st.markdown("Excel dosyanızı yükleyin, hedef bütçenizi girin ve Pareto sınıflarına göre emniyet seviyelerini (R Sütunu mantığıyla) hesaplayın.")
+    st.title("📊 Envanter & Bütçe Optimizasyon Paneli")
+    st.markdown("Stok parametrelerinizi analiz edin, yeni hizmet seviyesi senaryoları kurgulayın ve atıl bütçenizi kontrol altına alın.")
     
     # --- 2. DOSYA YÜKLEME ---
-    st.markdown("### 📄 1. Excel Dosyasını Yükleyin")
+    st.markdown("### 📄 1. Veri Yükleme")
     uploaded_files = st.file_uploader(
         "'Emniyet Seviyesi' Excel dosyasını seçin", 
         type=["xlsx", "xls", "xlsb"], accept_multiple_files=True
@@ -81,17 +81,45 @@ if check_password():
             z_old_all = np.where(z_old_all == 0, 1e-5, z_old_all)
             df['Hedef_Min_Fark'] = df['Hedef TL'] - df['Min TL']
             
-            st.success(f"✅ **{uploaded_file.name}** dosyası başarıyla yüklendi ve işlendi.")
+            st.success(f"✅ **{uploaded_file.name}** veritabanına başarıyla aktarıldı.")
             
-            # --- MEVCUT DURUM METRİKLERİ ---
-            st.markdown("#### 📌 Yüklenen Dosyaya Göre Mevcut Stok Durumu")
-            m1, m2, m3, m4, m5 = st.columns(5)
-            m1.metric("Mevcut Hedef TL", format_tr(df['Hedef TL'].sum()))
-            m2.metric("Mevcut Min TL", format_tr(df['Min TL'].sum()))
-            m3.metric("Mevcut Optimum TL", format_tr(df['Optimum TL'].sum()))
-            m4.metric("Mevcut Stok TL", format_tr(df['Stok TL'].sum()))
-            m5.metric("Mevcut Fazla TL", format_tr(df['Fazla TL'].sum()))
+            # ---------------------------------------------------------
+            # YÖNETİCİ ÖZETİ - GÜNCEL DURUM (KPI PANOLARI)
+            # ---------------------------------------------------------
             st.markdown("---")
+            st.markdown("### 📌 Yönetici Özeti: Mevcut Envanter Durumu")
+            
+            # Toplam hesaplamalar
+            mevcut_optimum_toplam = df['Optimum TL'].sum()
+            mevcut_fazla_toplam = df['Fazla TL'].sum()
+            mevcut_stok_toplam = df['Stok TL'].sum()
+            mevcut_hedef_toplam = df['Hedef TL'].sum()
+            mevcut_min_toplam = df['Min TL'].sum()
+            
+            # Kritik KPI formülleri
+            guncel_hedef_deger = mevcut_optimum_toplam + mevcut_fazla_toplam
+            stok_hedef_farki = mevcut_stok_toplam - guncel_hedef_deger
+            
+            # 3'lü Kritik Gösterge
+            kpi1, kpi2, kpi3 = st.columns(3)
+            with kpi1:
+                st.info(f"**Güncel Hedef Değer**\n### {format_tr(guncel_hedef_deger)}\n*(Optimum TL + Fazla TL)*")
+            with kpi2:
+                # Fark pozitifse stok şişkin, negatifse eksik
+                renk = "error" if stok_hedef_farki > 0 else "success"
+                st.info(f"**Stok İle Hedef Değer Farkı**\n### {format_tr(stok_hedef_farki)}\n*(Stok TL - Güncel Hedef Değer)*")
+            with kpi3:
+                st.info(f"**Mevcut Stok Değeri (Fiili)**\n### {format_tr(mevcut_stok_toplam)}\n*(Depodaki Toplam Stok)*")
+
+            # Detay Metrikler
+            st.markdown("<br>", unsafe_allow_html=True)
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Mevcut Min TL", format_tr(mevcut_min_toplam))
+            m2.metric("Mevcut Optimum TL", format_tr(mevcut_optimum_toplam))
+            m3.metric("Mevcut Hedef TL (Sistem)", format_tr(mevcut_hedef_toplam))
+            m4.metric("Mevcut Fazla/Atıl TL", format_tr(mevcut_fazla_toplam))
+            st.markdown("---")
+
 
             # --- 3. AKILLI BÜTÇE & PARETO ÖNERİ ASİSTANI ---
             with st.expander("💡 🤖 Bütçeye Göre Akıllı Pareto Öneri Asistanı (Otomatik Senaryo Analizi)", expanded=False):
@@ -110,7 +138,6 @@ if check_password():
                     run_analysis = st.button("🔍 Senaryoları Analiz Et ve Getir", use_container_width=True)
 
                 if run_analysis:
-                    # Kombinasyon bulmak için Hızlı Gruplama (Sadece Hedef TL bulmak için)
                     df_temp = pd.DataFrame({
                         'cls': df['Temiz_Pareto'],
                         'min_div_z': np.where(df['Emniyet Seviyesi'] <= 50, 0, df['Min TL'] / z_old_all),
@@ -161,16 +188,17 @@ if check_password():
                         s_idx = min(s_idx, n_res - 1)
                         scen = valid_res[s_idx]
                         
-                        # EXCEL İLE %100 AYNI HESAPLAMA (TÜM METRİKLER İÇİN)
                         level_map_scen = {'A': scen['A'], 'B': scen['B'], 'C': scen['C'], 'D': scen['D'], 'E': scen['E'], 'BOŞ': scen['BOS']}
                         scen_emniyet = df['Temiz_Pareto'].map(level_map_scen).fillna(scen['BOS']) / 100.0
                         z_new_scen = scen_emniyet.apply(lambda p: NormalDist().inv_cdf(p))
                         
-                        # Excel'deki T, U, V, W sütunlarının BİREBİR iterasyonu
                         scen_yeni_min = np.where(df['Emniyet Seviyesi'] <= 50, 0, df['Min TL'] * (z_new_scen / z_old_all))
                         scen_yeni_hedef = scen_yeni_min + df['Hedef_Min_Fark']
                         scen_yeni_optimum = (scen_yeni_min + scen_yeni_hedef) / 2.0
                         scen_yeni_fazla = np.maximum(0, df['Stok TL'] - scen_yeni_hedef)
+                        
+                        # Senaryo İçi Tedarik Yöneticisi Özeti
+                        scen_guncel_hedef = scen_yeni_optimum.sum() + scen_yeni_fazla.sum()
                         
                         with s_cols[idx_i]:
                             st.subheader(s_title)
@@ -179,7 +207,6 @@ if check_password():
                             st.metric("🎯 Yeni Hedef TL", format_tr(scen_yeni_hedef.sum()))
                             st.metric("📉 Yeni Min TL", format_tr(scen_yeni_min.sum()))
                             st.metric("⚖️ Yeni Optimum TL", format_tr(scen_yeni_optimum.sum()))
-                            st.metric("📦 Mevcut Stok TL", format_tr(df['Stok TL'].sum()))
                             st.metric("⚠️ Yeni Fazla TL", format_tr(scen_yeni_fazla.sum()))
                             
                             if st.button(f"✅ Bu Senaryoyu Seç", key=f"btn_scen_{idx_i}"):
@@ -193,26 +220,26 @@ if check_password():
             # --- 4. HEDEF BÜTÇE VE PARETO SEÇİM FORMU ---
             options_5 = list(range(50, 100, 5))
             with st.form(key="butce_hesaplama_formu"):
-                st.markdown("### 🎯 2. Hedef Bütçe & Emniyet Seviyesi Ayarları")
+                st.markdown("### 🛠️ 2. Stratejik Planlama: Hizmet Seviyelerini Belirle")
                 
                 col_b1, col_b2 = st.columns([1, 1])
                 with col_b1:
                     hedef_butce_input = st.number_input(
-                        "Hedeflemek İstediğiniz Toplam Bütçe Sınırı (TL):",
+                        "Yönetim Bütçe Sınırı / Hedef (TL):",
                         value=int(st.session_state["hedef_butce"]), step=50000000, format="%d"
                     )
                 
-                st.markdown("**Defa (Pareto) Sınıflarına Göre Emniyet Seviyeleri Seçimi (R Sütunu):**")
+                st.markdown("**ABC/Pareto Sınıflarına Göre Hizmet (Emniyet) Seviyeleri (%):**")
                 p1, p2, p3, p4, p5, p6 = st.columns(6)
-                with p1: level_A = st.selectbox("A Grubu Emniyet %", options_5, index=options_5.index(st.session_state.get("level_A", 90)))
-                with p2: level_B = st.selectbox("B Grubu Emniyet %", options_5, index=options_5.index(st.session_state.get("level_B", 85)))
-                with p3: level_C = st.selectbox("C Grubu Emniyet %", options_5, index=options_5.index(st.session_state.get("level_C", 80)))
-                with p4: level_D = st.selectbox("D Grubu Emniyet %", options_5, index=options_5.index(st.session_state.get("level_D", 75)))
-                with p5: level_E = st.selectbox("E Grubu Emniyet %", options_5, index=options_5.index(st.session_state.get("level_E", 70)))
-                with p6: level_BOS = st.selectbox("Boş/Tanımsız %", options_5, index=options_5.index(st.session_state.get("level_BOS", 50)))
+                with p1: level_A = st.selectbox("A Sınıfı", options_5, index=options_5.index(st.session_state.get("level_A", 90)))
+                with p2: level_B = st.selectbox("B Sınıfı", options_5, index=options_5.index(st.session_state.get("level_B", 85)))
+                with p3: level_C = st.selectbox("C Sınıfı", options_5, index=options_5.index(st.session_state.get("level_C", 80)))
+                with p4: level_D = st.selectbox("D Sınıfı", options_5, index=options_5.index(st.session_state.get("level_D", 75)))
+                with p5: level_E = st.selectbox("E Sınıfı", options_5, index=options_5.index(st.session_state.get("level_E", 70)))
+                with p6: level_BOS = st.selectbox("Tanımsız Sınıf", options_5, index=options_5.index(st.session_state.get("level_BOS", 50)))
                 
                 st.markdown("<br>", unsafe_allow_html=True)
-                form_submitted = st.form_submit_button("🚀 Değerleri Onayla ve Hesapla", use_container_width=True)
+                form_submitted = st.form_submit_button("🚀 Senaryoyu Hesapla ve Uygula", use_container_width=True)
 
             if form_submitted:
                 st.session_state.update({
@@ -221,7 +248,7 @@ if check_password():
                     "hedef_butce": hedef_butce_input, "form_submitted": True
                 })
 
-            # --- 5. HESAPLAMA VE SONUÇ EKRANI (EXCEL R SÜTUNU MANTIĞI) ---
+            # --- 5. HESAPLAMA VE SONUÇ EKRANI (TEDARİK ZİNCİRİ ÖZETİ) ---
             if st.session_state["form_submitted"]:
                 level_map = {
                     'A': st.session_state["level_A"], 'B': st.session_state["level_B"],
@@ -234,35 +261,50 @@ if check_password():
                 new_levels = df['Yeni_Emniyet_Seviyesi'] / 100.0
                 z_new = new_levels.apply(lambda p: NormalDist().inv_cdf(p))
                 
-                # Excel'deki T, U, V, W Sütunlarının Formül Birebir Karşılığı
                 df['Yeni Min TL'] = np.where(df['Emniyet Seviyesi'] <= 50, 0, df['Min TL'] * (z_new / z_old_all))
                 df['Yeni Hedef TL'] = df['Yeni Min TL'] + df['Hedef_Min_Fark']
                 df['Yeni Optimum TL'] = (df['Yeni Min TL'] + df['Yeni Hedef TL']) / 2.0
                 df['Yeni Fazla TL'] = np.maximum(0, df['Stok TL'] - df['Yeni Hedef TL'])
                 
+                # --- YENİ TEDARİK KPI HESAPLARI ---
+                yeni_toplam_optimum = df['Yeni Optimum TL'].sum()
+                yeni_toplam_fazla = df['Yeni Fazla TL'].sum()
+                
+                yeni_hedef_deger = yeni_toplam_optimum + yeni_toplam_fazla
+                yeni_stok_hedef_farki = mevcut_stok_toplam - yeni_hedef_deger
                 yeni_toplam_hedef = df['Yeni Hedef TL'].sum()
                 
-                # --- 6. SONUÇ PANELLERİ (5 TEMEL METRİK) ---
                 st.markdown("---")
-                st.markdown("### 📈 3. Yeni Belirlenen Hedef Seviyeleri & Bütçe Analizi")
+                st.markdown("### 📈 3. Tedarik Zinciri & Senaryo Sonuçları")
                 
-                k1, k2, k3, k4, k5 = st.columns(5)
-                k1.metric("Yeni Hedef TL", format_tr(yeni_toplam_hedef))
-                k2.metric("Yeni Min TL", format_tr(df['Yeni Min TL'].sum()))
-                k3.metric("Yeni Optimum TL", format_tr(df['Yeni Optimum TL'].sum()))
-                k4.metric("Mevcut Stok TL", format_tr(df['Stok TL'].sum()))
-                k5.metric("Yeni Fazla (Atıl) TL", format_tr(df['Yeni Fazla TL'].sum()))
+                # YENİ KPI KARTLARI
+                res1, res2, res3 = st.columns(3)
+                with res1:
+                    st.success(f"**YENİ Hedef Değer (Kurgulanan)**\n### {format_tr(yeni_hedef_deger)}\n*(Yeni Optimum TL + Yeni Fazla TL)*")
+                with res2:
+                    st.success(f"**YENİ Stok İle Hedef Değer Farkı**\n### {format_tr(yeni_stok_hedef_farki)}\n*(Stok TL - Yeni Hedef Değer)*")
+                with res3:
+                    st.success(f"**YENİ Hedef TL Toplamı (Bütçe Limit Kontrolü)**\n### {format_tr(yeni_toplam_hedef)}\n*(Seçilen senaryoya ait taban hedef)*")
                 
-                st.markdown("---")
+                st.markdown("<br>", unsafe_allow_html=True)
+                
+                # Detaylar ve Bütçe Uygunluğu
                 aktuel_butce = st.session_state["hedef_butce"]
-                fark = aktuel_butce - yeni_toplam_hedef
-                if fark >= 0:
-                    st.success(f"🟢 **BÜTÇE UYGUN:** Yeni Hedef TL ({format_tr(yeni_toplam_hedef)}), {format_tr(aktuel_butce)} sınırının altında. Kalan Bütçe: {format_tr(fark)}")
+                fark_butce = aktuel_butce - yeni_toplam_hedef
+                if fark_butce >= 0:
+                    st.success(f"🟢 **BÜTÇE UYGUN:** Yeni oluşturulan **Hedef TL ({format_tr(yeni_toplam_hedef)})**, belirlediğiniz **{format_tr(aktuel_butce)}** bütçe sınırının altındadır. *(Avantaj: {format_tr(fark_butce)})*")
                 else:
-                    st.error(f"🔴 **BÜTÇE AŞILDI:** Yeni Hedef TL ({format_tr(yeni_toplam_hedef)}), {format_tr(aktuel_butce)} sınırını {format_tr(abs(fark))} aşıyor.")
+                    st.error(f"🔴 **BÜTÇE AŞILDI:** Yeni oluşturulan **Hedef TL ({format_tr(yeni_toplam_hedef)})**, belirlediğiniz **{format_tr(aktuel_butce)}** bütçe sınırını **{format_tr(abs(fark_butce))}** tutarında aşmaktadır! Hizmet seviyelerini düşürünüz.")
+                
+                # Sütun halinde alt metrikler
+                k1, k2, k3, k4 = st.columns(4)
+                k1.metric("Yeni Hedef TL (Detay)", format_tr(yeni_toplam_hedef))
+                k2.metric("Yeni Min TL", format_tr(df['Yeni Min TL'].sum()))
+                k3.metric("Yeni Optimum TL", format_tr(yeni_toplam_optimum))
+                k4.metric("Yeni Fazla (Atıl) TL", format_tr(yeni_toplam_fazla))
                 
                 # --- 7. TABLO GÖSTERİMİ VE İNDİRME ---
-                st.markdown("### 📋 4. Ürün Bazlı Detay Tablosu")
+                st.markdown("### 📋 4. Ürün Bazlı Operasyonel Detay Tablosu")
                 
                 gosterim_sutunlari = [
                     'Ürün Kodu', 'Ürün', pareto_col_name, 'Emniyet Seviyesi', 
@@ -273,14 +315,14 @@ if check_password():
                 
                 st.dataframe(df[gosterim_sutunlari], use_container_width=True)
                 
-                st.markdown("### 📥 5. Sonuçları Excel (.xlsx) Formatında İndirin")
+                st.markdown("### 📥 5. Veri Dışa Aktarımı")
                 excel_buffer = io.BytesIO()
                 with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                    df[gosterim_sutunlari].to_excel(writer, index=False, sheet_name='Emniyet_Optimizasyonu')
+                    df[gosterim_sutunlari].to_excel(writer, index=False, sheet_name='Stok_Optimizasyon_Sonucu')
                     
                 st.download_button(
-                    label="🟢 Sonuçları Excel (.xlsx) Olarak İndir", data=excel_buffer.getvalue(),
-                    file_name=f"Optimizasyon_{aktuel_butce}_TL.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    label="🟢 Yeni Stok Senaryosunu Excel (.xlsx) Olarak İndir", data=excel_buffer.getvalue(),
+                    file_name=f"Stok_Optimizasyon_{aktuel_butce}_TL.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
 
         except Exception as e:
