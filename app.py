@@ -32,12 +32,19 @@ if check_password():
     
     # --- 2. DOSYA YÜKLEME ---
     st.markdown("### 📄 1. Excel Dosyasını Yükleyin")
-    uploaded_file = st.file_uploader("'Emniyet Seviyesi' Excel dosyasını seçin", type=["xlsx", "xls"])
+    uploaded_files = st.file_uploader(
+        "'Emniyet Seviyesi' Excel dosyasını seçin (Lütfen tek dosya seçiniz)", 
+        type=["xlsx", "xls", "xlsb"],
+        accept_multiple_files=True
+    )
     
-    if uploaded_file is not None:
+    if uploaded_files:
+        # Birden fazla dosya atılırsa en sonuncusunu al
+        uploaded_file = uploaded_files[-1]
         try:
             # Excel Okuma (Başlıklar 7. satırda (skiprows=6))
-            df = pd.read_excel(uploaded_file, sheet_name='Stok seviyesi', skiprows=6)
+            engine_choice = 'pyxlsb' if uploaded_file.name.endswith('.xlsb') else None
+            df = pd.read_excel(uploaded_file, sheet_name='Stok seviyesi', skiprows=6, engine=engine_choice)
             
             # Sütun isimlerindeki gizli boşlukları temizleme
             df.columns = df.columns.astype(str).str.strip()
@@ -56,7 +63,7 @@ if check_password():
             mevcut_optimum = df['Optimum TL'].sum() if 'Optimum TL' in df.columns else 0
             mevcut_fazla = df['Fazla TL'].sum() if 'Fazla TL' in df.columns else 0
             
-            st.success("✅ Excel dosyası başarıyla yüklendi ve tüm sütunlar okundu.")
+            st.success(f"✅ **{uploaded_file.name}** dosyası başarıyla yüklendi ve işlendi.")
             
             # --- 3. MEVCUT DURUM GÖSTERGELERİ ---
             st.markdown("#### 📌 Yüklenen Dosyaya Göre Mevcut Stok Durumu")
@@ -84,7 +91,7 @@ if check_password():
             
             st.markdown("**Defa (Pareto) Sınıflarına Göre Emniyet Seviyeleri (Sadece 0 veya 5 ile biten değerler):**")
             
-            # A, B, C, D, E Seviye Seçimleri (Sadece 5'in katları: 50, 55, 60, 65, 70, 75, 80, 85, 90, 95)
+            # A, B, C, D, E Seviye Seçimleri (50, 55, 60, 65, 70, 75, 80, 85, 90, 95)
             options_5 = list(range(50, 100, 5))
             
             p1, p2, p3, p4, p5 = st.columns(5)
@@ -101,7 +108,7 @@ if check_password():
                 
             level_map = {'A': level_A, 'B': level_B, 'C': level_C, 'D': level_D, 'E': level_E}
             
-            # --- 5. YENİ DEĞERLERİ MATEMATİKSEL OLARAK HESAPLAMA ---
+            # --- 5. MATEMATİKSEL HESAPLAMA ---
             pareto_col_name = 'Defa Pareto' if 'Defa Pareto' in df.columns else ('Defa ABC' if 'Defa ABC' in df.columns else None)
             
             if pareto_col_name:
@@ -111,7 +118,7 @@ if check_password():
                 
             df['Yeni_Emniyet_Seviyesi'] = pareto_series.map(level_map).fillna(75)
             
-            # NORMSINV Formülü ile Yeni Min, Hedef, Optimum, Fazla TL Hesaplama
+            # NORMSINV Formülü ile Hesaplama
             old_levels = df['Emniyet Seviyesi'].clip(50, 99) / 100.0
             new_levels = df['Yeni_Emniyet_Seviyesi'] / 100.0
             
@@ -119,23 +126,16 @@ if check_password():
             z_old = np.where(z_old == 0, 1e-5, z_old)
             z_new = new_levels.apply(lambda p: NormalDist().inv_cdf(p))
             
-            # S = Hedef - Min
             df['Hedef_Min_Fark'] = df['Hedef TL'] - df['Min TL']
-            
-            # Yeni Min TL = Min TL * (Z_new / Z_old)
             df['Yeni Min TL'] = df['Min TL'] * (z_new / z_old)
-            # Yeni Hedef TL = Yeni Min TL + Fark
             df['Yeni Hedef TL'] = df['Yeni Min TL'] + df['Hedef_Min_Fark']
-            # Yeni Optimum TL = (Yeni Min TL + Yeni Hedef TL) / 2
             df['Yeni Optimum TL'] = (df['Yeni Min TL'] + df['Yeni Hedef TL']) / 2.0
-            # Yeni Fazla TL = MAX(0, Stok TL - Yeni Hedef TL)
             df['Yeni Fazla TL'] = np.maximum(0, df['Stok TL'] - df['Yeni Hedef TL'])
             
-            # Yeni Toplamlar
             yeni_toplam_hedef = df['Yeni Hedef TL'].sum()
             yeni_toplam_fazla = df['Yeni Fazla TL'].sum()
             
-            # --- 6. HESAPLANAN SONUÇ PANOLARI ---
+            # --- 6. HESAPLANAN SONUÇ PANELLERİ ---
             st.markdown("---")
             st.markdown("### 📈 3. Yeni Belirlenen Hedef Seviyeleri & Bütçe Analizi")
             
@@ -153,7 +153,7 @@ if check_password():
                 
             k4.metric("Yeni Oluşan Fazla (Atıl) Stok TL", f"{yeni_toplam_fazla:,.0f} ₺".replace(",", "."))
             
-            # --- 7. TABLO GÖSTERİMİ VE TEMİZ DÜZENLEME ---
+            # --- 7. TABLO GÖSTERİMİ ---
             st.markdown("### 📋 4. Ürün Bazlı Detay Tablosu")
             
             gosterim_sutunlari = [
@@ -163,12 +163,10 @@ if check_password():
             ]
             gosterim_sutunlari = [c for c in gosterim_sutunlari if c in df.columns]
             
-            df_display = df[gosterim_sutunlari].copy()
-            st.dataframe(df_display, use_container_width=True)
+            st.dataframe(df[gosterim_sutunlari], use_container_width=True)
             
-            # --- 8. DOĞRUDAN DÜZGÜN EXCEL (.XLSX) OLARAK İNDİRME BUTONU ---
+            # --- 8. EXCEL İNDİRME ---
             st.markdown("### 📥 5. Sonuçları Excel (.xlsx) Formatında İndirin")
-            st.markdown("Aşağıdaki yeşil butona basarak sonuçları bozulmadan, düzgün Microsoft Excel tablosu olarak bilgisayarınıza indirebilirsiniz.")
             
             excel_buffer = io.BytesIO()
             with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
