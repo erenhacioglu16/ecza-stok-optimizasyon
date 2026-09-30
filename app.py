@@ -8,7 +8,7 @@ import openpyxl
 # --- SAYFA YAPILANDIRMASI ---
 st.set_page_config(page_title="BEK Envanter & Bütçe Optimizasyon Paneli", layout="wide", initial_sidebar_state="collapsed")
 
-# --- BEK KURUMSAL CSS TASARIMI ---
+# --- BEK KURUMSAL CSS TASARIMI & KART YAPISI ---
 st.markdown("""
 <style>
     /* Genel Arka Plan ve Metin Rengi */
@@ -35,10 +35,12 @@ st.markdown("""
         background-color: #003366 !important;
         box-shadow: 0 4px 10px rgba(0,0,0,0.15);
     }
-    /* İndirme Butonu Özelleştirmesi (Tasarruf vb. seçme butonları) */
+    /* İndirme Butonu Özelleştirmesi (Excel) */
     .stDownloadButton>button {
         background-color: #27ae60 !important;
         color: white !important;
+        width: 100%;
+        border-radius: 6px;
     }
     .stDownloadButton>button:hover {
         background-color: #219653 !important;
@@ -46,6 +48,20 @@ st.markdown("""
     /* Metrik Değerleri Rengi */
     div[data-testid="stMetricValue"] {
         color: #00458b;
+    }
+    
+    /* Senaryo Kartları İçin Kutu Tasarımı (Hover Efektli) */
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        border-radius: 10px !important;
+        border: 1px solid #e0e6ed !important;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.04);
+        background-color: #ffffff;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"]:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 8px 15px rgba(0, 69, 139, 0.1);
+        border-color: #00458b !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -56,14 +72,6 @@ def format_tr(val):
         return "0 ₺"
     s = f"{val:,.0f}"
     return s.replace(",", ".") + " ₺"
-
-def table_format_tr(val):
-    if pd.isna(val): return ""
-    try:
-        s = f"{val:,.2f}"
-        return s.replace(",", "X").replace(".", ",").replace("X", ".")
-    except:
-        return val
 
 options_ui = [50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 99]
 
@@ -87,15 +95,14 @@ def check_password():
         return False
     return True
 
-# --- EXCEL OLUŞTURMA FONKSİYONU (OPENPYXL İLE HATASIZ) ---
+# --- EXCEL OLUŞTURMA FONKSİYONU ---
 def create_formatted_excel(df_export, cols_to_format):
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
         df_export.to_excel(writer, index=False, sheet_name='Senaryo_Sonucu')
         worksheet = writer.sheets['Senaryo_Sonucu']
         
-        # openpyxl ile sütun genişliği ve sayı formatı ayarı
-        for col_idx, col_name in enumerate(df_export.columns, 1): # Excel sütunları 1'den başlar
+        for col_idx, col_name in enumerate(df_export.columns, 1):
             if col_name in cols_to_format:
                 worksheet.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = 20
                 for row_idx in range(2, len(df_export) + 2):
@@ -111,7 +118,7 @@ if check_password():
     st.markdown("Stok parametrelerinizi analiz edin, senaryoları inceleyin ve dilediğiniz bütçe planını tek tıkla raporlayın.")
     
     # --- 2. DOSYA YÜKLEME ---
-    st.markdown("### 📑 1. Veri Yükleme")
+    st.markdown("### 📑 Veri Yükleme")
     uploaded_files = st.file_uploader(
         "'Emniyet Seviyesi' Excel dosyasını seçiniz", 
         type=["xlsx", "xls", "xlsb"], accept_multiple_files=True
@@ -147,7 +154,7 @@ if check_password():
             st.success(f"Sistem Bilgisi: '{uploaded_file.name}' başarıyla işlendi.")
             
             # ---------------------------------------------------------
-            # YÖNETİCİ ÖZETİ - GÜNCEL DURUM
+            # YÖNETİCİ ÖZETİ
             # ---------------------------------------------------------
             st.markdown("---")
             st.markdown("### 📈 Yönetici Özeti: Mevcut Envanter Durumu")
@@ -169,19 +176,17 @@ if check_password():
             st.markdown("---")
 
             # --- 3. AKILLI BÜTÇE & PARETO ÖNERİ ASİSTANI ---
-            st.markdown("### ⚙️ 2. Bütçeye Göre Stratejik Pareto Planlama")
-            st.markdown("Analiz edilen senaryolardan size uygun olanını altındaki butona tıklayarak sonuçları doğrudan raporlayabilirsiniz.")
+            st.markdown("### ⚙️ Bütçeye Göre Stratejik Pareto Planlama")
+            st.markdown("Aşağıya hedef bütçenizi girin. Sistem size en mantıklı kademeli senaryoları özel kartlar halinde sunacaktır. Dilediğinizi Excel olarak indirebilirsiniz.")
             
             col_rec1, col_rec2 = st.columns([2, 1])
             with col_rec1:
                 analiz_butce = st.number_input(
                     "Hedeflediğiniz Bütçe Sınırını Giriniz (TL):",
                     value=int(st.session_state["hedef_butce"]),
-                    step=50000000, format="%d"
+                    step=50000000, format="%d", label_visibility="collapsed"
                 )
             with col_rec2:
-                st.write("")
-                st.write("")
                 run_analysis = st.button("Analizi Başlat (8 Kademeli Senaryo)", use_container_width=True)
 
             if run_analysis:
@@ -254,9 +259,9 @@ if check_password():
                     p_indices = ["1. Tasarruf (Min)", "2. Ekonomik Alt", "3. Ekonomik Üst", "4. Yüksek Hizmet", "5. Bütçe Sınırı", "6. Bütçe Aşımı (%2)", "7. Bütçe Aşımı (%5)", "8. Max Fırsat (%10)"]
                     money_cols = ['Min TL', 'Optimum TL', 'Hedef TL', 'Stok TL', 'Fazla TL', 'Yeni Min TL', 'Yeni Optimum TL', 'Yeni Hedef TL', 'Yeni Fazla TL', 'Yeni Hedef Değer']
                     
-                    st.markdown("#### 📑 Analiz Edilen Stratejik Senaryolar")
+                    st.markdown("<br><h4>📑 Analiz Edilen Stratejik Senaryolar</h4>", unsafe_allow_html=True)
                     
-                    # İLK SATIR (1-4)
+                    # İLK SATIR KARTLARI (1-4)
                     row1 = st.columns(4)
                     for idx_i in range(4):
                         if idx_i >= len(selected_scenarios): continue
@@ -278,22 +283,22 @@ if check_password():
                         excel_data = create_formatted_excel(df_export, money_cols)
                         
                         with row1[idx_i]:
-                            st.subheader(p_indices[idx_i])
-                            st.markdown(f"**A:** %{scen['A']} | **B:** %{scen['B']} | **C:** %{scen['C']}<br>**D:** %{scen['D']} | **E:** %{scen['E']} | **Boş:** %{scen['BOS']}", unsafe_allow_html=True)
-                            st.markdown("---")
-                            st.metric("Hedef Değer", format_tr(scen_guncel_hedef))
-                            
-                            st.download_button(
-                                label="📥 Raporu İndir (Excel)",
-                                data=excel_data,
-                                file_name=f"BEK_Senaryo_{idx_i+1}_{int(scen_guncel_hedef)}_TL.xlsx",
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                key=f"dl_{idx_i}"
-                            )
+                            with st.container(border=True): # KART KUTUSU
+                                st.subheader(p_indices[idx_i])
+                                st.markdown(f"**A:** %{scen['A']} | **B:** %{scen['B']} | **C:** %{scen['C']}<br>**D:** %{scen['D']} | **E:** %{scen['E']} | **Boş:** %{scen['BOS']}", unsafe_allow_html=True)
+                                st.markdown("<hr style='margin-top: 10px; margin-bottom: 10px;'>", unsafe_allow_html=True)
+                                st.metric("Hedef Değer", format_tr(scen_guncel_hedef))
+                                st.download_button(
+                                    label="📥 Raporu İndir (Excel)",
+                                    data=excel_data,
+                                    file_name=f"BEK_Senaryo_{idx_i+1}_{int(scen_guncel_hedef)}_TL.xlsx",
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                    key=f"dl_{idx_i}"
+                                )
 
                     st.markdown("<br>", unsafe_allow_html=True)
                     
-                    # İKİNCİ SATIR (5-8)
+                    # İKİNCİ SATIR KARTLARI (5-8)
                     row2 = st.columns(4)
                     for idx_i in range(4, 8):
                         if idx_i >= len(selected_scenarios): continue
@@ -315,20 +320,21 @@ if check_password():
                         excel_data = create_formatted_excel(df_export, money_cols)
                         
                         with row2[idx_i - 4]:
-                            st.subheader(p_indices[idx_i])
-                            st.markdown(f"**A:** %{scen['A']} | **B:** %{scen['B']} | **C:** %{scen['C']}<br>**D:** %{scen['D']} | **E:** %{scen['E']} | **Boş:** %{scen['BOS']}", unsafe_allow_html=True)
-                            st.markdown("---")
-                            
-                            delta_val = float(scen_guncel_hedef) - float(analiz_butce)
-                            st.metric("Hedef Değer", format_tr(scen_guncel_hedef), delta=f"{format_tr(abs(delta_val))} Fark", delta_color="inverse" if delta_val > 0 else "normal")
-                            
-                            st.download_button(
-                                label="📥 Raporu İndir (Excel)",
-                                data=excel_data,
-                                file_name=f"BEK_Senaryo_{idx_i+1}_{int(scen_guncel_hedef)}_TL.xlsx",
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                key=f"dl_{idx_i}"
-                            )
+                            with st.container(border=True): # KART KUTUSU
+                                st.subheader(p_indices[idx_i])
+                                st.markdown(f"**A:** %{scen['A']} | **B:** %{scen['B']} | **C:** %{scen['C']}<br>**D:** %{scen['D']} | **E:** %{scen['E']} | **Boş:** %{scen['BOS']}", unsafe_allow_html=True)
+                                st.markdown("<hr style='margin-top: 10px; margin-bottom: 10px;'>", unsafe_allow_html=True)
+                                
+                                delta_val = float(scen_guncel_hedef) - float(analiz_butce)
+                                st.metric("Hedef Değer", format_tr(scen_guncel_hedef), delta=f"{format_tr(abs(delta_val))} Fark", delta_color="inverse" if delta_val > 0 else "normal")
+                                
+                                st.download_button(
+                                    label="📥 Raporu İndir (Excel)",
+                                    data=excel_data,
+                                    file_name=f"BEK_Senaryo_{idx_i+1}_{int(scen_guncel_hedef)}_TL.xlsx",
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                    key=f"dl_{idx_i}"
+                                )
 
         except Exception as e:
             st.error(f"Sistem Hatası: {e}")
