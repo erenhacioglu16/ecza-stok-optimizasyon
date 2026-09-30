@@ -11,17 +11,14 @@ st.set_page_config(page_title="BEK Envanter & Bütçe Optimizasyon Paneli", layo
 # --- BEK KURUMSAL CSS TASARIMI & KART YAPISI ---
 st.markdown("""
 <style>
-    /* Genel Arka Plan ve Metin Rengi */
     .stApp {
         background-color: #f4f6f9;
         color: #2c3e50;
     }
-    /* Başlıklar - BEK Lacivert */
     h1, h2, h3, h4, h5, h6 {
         color: #00458b !important;
         font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     }
-    /* Buton Tasarımları */
     .stButton>button {
         background-color: #00458b !important;
         color: white !important;
@@ -35,22 +32,20 @@ st.markdown("""
         background-color: #003366 !important;
         box-shadow: 0 4px 10px rgba(0,0,0,0.15);
     }
-    /* İndirme Butonu Özelleştirmesi (Excel) */
+    /* İndirme Butonu Özelleştirmesi (Excel & TXT) */
     .stDownloadButton>button {
         background-color: #27ae60 !important;
         color: white !important;
         width: 100%;
         border-radius: 6px;
+        margin-bottom: 5px;
     }
     .stDownloadButton>button:hover {
         background-color: #219653 !important;
     }
-    /* Metrik Değerleri Rengi */
     div[data-testid="stMetricValue"] {
         color: #00458b;
     }
-    
-    /* Senaryo Kartları İçin Kutu Tasarımı (Hover Efektli) */
     div[data-testid="stVerticalBlockBorderWrapper"] {
         border-radius: 10px !important;
         border: 1px solid #e0e6ed !important;
@@ -66,7 +61,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# KPI'lar için format
 def format_tr(val):
     if pd.isna(val) or val == 0:
         return "0 ₺"
@@ -95,7 +89,7 @@ def check_password():
         return False
     return True
 
-# --- EXCEL OLUŞTURMA FONKSİYONU ---
+# --- EXCEL & TXT OLUŞTURMA FONKSİYONLARI ---
 def create_formatted_excel(df_export, cols_to_format):
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
@@ -113,11 +107,36 @@ def create_formatted_excel(df_export, cols_to_format):
                 
     return buffer.getvalue()
 
+def create_sap_txt(df_export, org_col):
+    df_sap = pd.DataFrame()
+    
+    # Küsürat/Boşluk Hatalarına Karşı Güvenli Format Çevirici
+    def safe_format(val):
+        try:
+            return str(int(float(val)))
+        except:
+            return str(val).strip()
+
+    # Şube Kodu
+    if org_col in df_export.columns:
+        df_sap['SA_Org'] = df_export[org_col].apply(safe_format)
+    else:
+        df_sap['SA_Org'] = "1101" # Bulunamazsa varsayılan
+        
+    # Ürün Kodu ve Yeni Hizmet Seviyesi
+    df_sap['Urun'] = df_export['Ürün Kodu'].apply(safe_format)
+    df_sap['Seviye'] = df_export['Yeni_Emniyet_Seviyesi'].fillna(0).astype(int).astype(str)
+    
+    # Başlıksız (Header=False) ve TAB ile ayrılarak dışa aktarım (SAP Standardı)
+    buffer = io.StringIO()
+    df_sap.to_csv(buffer, sep='\t', index=False, header=False)
+    return buffer.getvalue().encode('utf-8')
+
+# --- ANA UYGULAMA ---
 if check_password():
     st.title("📊 BEK Envanter & Bütçe Optimizasyon Paneli")
     st.markdown("Stok parametrelerinizi analiz edin, senaryoları inceleyin ve dilediğiniz bütçe planını tek tıkla raporlayın.")
     
-    # --- 2. DOSYA YÜKLEME ---
     st.markdown("### 📑 Veri Yükleme")
     uploaded_files = st.file_uploader(
         "'Emniyet Seviyesi' Excel dosyasını seçiniz", 
@@ -145,6 +164,9 @@ if check_password():
             else:
                 pareto_series = pd.Series(['BOŞ'] * len(df), index=df.index)
             df['Temiz_Pareto'] = pareto_series
+            
+            # Şube / Org Kodu tespiti (SAP için)
+            org_col_name = 'SA Org. Ko' if 'SA Org. Ko' in df.columns else 'Şube Kodu'
 
             old_levels_all = df['Emniyet Seviyesi'].clip(50, 99) / 100.0
             z_old_all = old_levels_all.apply(lambda p: NormalDist().inv_cdf(p))
@@ -153,9 +175,6 @@ if check_password():
             
             st.success(f"Sistem Bilgisi: '{uploaded_file.name}' başarıyla işlendi.")
             
-            # ---------------------------------------------------------
-            # YÖNETİCİ ÖZETİ
-            # ---------------------------------------------------------
             st.markdown("---")
             st.markdown("### 📈 Yönetici Özeti: Mevcut Envanter Durumu")
             
@@ -175,9 +194,9 @@ if check_password():
                 st.info(f"**Mevcut Stok Değeri (Fiili)**\n### {format_tr(mevcut_stok_toplam)}\n*(Depodaki Toplam Stok)*")
             st.markdown("---")
 
-            # --- 3. AKILLI BÜTÇE & PARETO ÖNERİ ASİSTANI ---
+            # --- AKILLI BÜTÇE & PARETO ÖNERİ ASİSTANI ---
             st.markdown("### ⚙️ Bütçeye Göre Stratejik Pareto Planlama")
-            st.markdown("Aşağıya hedef bütçenizi girin. Sistem size en mantıklı kademeli senaryoları özel kartlar halinde sunacaktır. Dilediğinizi Excel olarak indirebilirsiniz.")
+            st.markdown("Aşağıya hedef bütçenizi girin. Sistem size en mantıklı kademeli senaryoları sunacaktır.")
             
             col_rec1, col_rec2 = st.columns([2, 1])
             with col_rec1:
@@ -259,6 +278,11 @@ if check_password():
                     p_indices = ["1. Tasarruf (Min)", "2. Ekonomik Alt", "3. Ekonomik Üst", "4. Yüksek Hizmet", "5. Bütçe Sınırı", "6. Bütçe Aşımı (%2)", "7. Bütçe Aşımı (%5)", "8. Max Fırsat (%10)"]
                     money_cols = ['Min TL', 'Optimum TL', 'Hedef TL', 'Stok TL', 'Fazla TL', 'Yeni Min TL', 'Yeni Optimum TL', 'Yeni Hedef TL', 'Yeni Fazla TL', 'Yeni Hedef Değer']
                     
+                    # Dışa aktarılacak temel sütunlar listesi
+                    cols_to_pull = ['Ürün Kodu', 'Ürün', pareto_col_name, 'Emniyet Seviyesi', 'Min TL', 'Optimum TL', 'Hedef TL', 'Stok TL', 'Fazla TL']
+                    if org_col_name in df.columns:
+                        cols_to_pull.insert(0, org_col_name) # SAP için Şube kodu varsa ekle
+                    
                     st.markdown("<br><h4>📑 Analiz Edilen Stratejik Senaryolar</h4>", unsafe_allow_html=True)
                     
                     # İLK SATIR KARTLARI (1-4)
@@ -267,7 +291,7 @@ if check_password():
                         if idx_i >= len(selected_scenarios): continue
                         scen = selected_scenarios[idx_i]
                         
-                        df_export = df[['Ürün Kodu', 'Ürün', pareto_col_name, 'Emniyet Seviyesi', 'Min TL', 'Optimum TL', 'Hedef TL', 'Stok TL', 'Fazla TL']].copy()
+                        df_export = df[cols_to_pull].copy()
                         level_map_scen = {'A': scen['A'], 'B': scen['B'], 'C': scen['C'], 'D': scen['D'], 'E': scen['E'], 'BOŞ': scen['BOS']}
                         
                         df_export['Yeni_Emniyet_Seviyesi'] = df['Temiz_Pareto'].map(level_map_scen).fillna(scen['BOS'])
@@ -280,20 +304,33 @@ if check_password():
                         df_export['Yeni Hedef Değer'] = df_export['Yeni Optimum TL'] + df_export['Yeni Fazla TL']
                         
                         scen_guncel_hedef = df_export['Yeni Hedef Değer'].sum()
+                        
+                        # Dosya Üretimleri
                         excel_data = create_formatted_excel(df_export, money_cols)
+                        txt_data = create_sap_txt(df_export, org_col_name)
                         
                         with row1[idx_i]:
-                            with st.container(border=True): # KART KUTUSU
+                            with st.container(border=True): 
                                 st.subheader(p_indices[idx_i])
                                 st.markdown(f"**A:** %{scen['A']} | **B:** %{scen['B']} | **C:** %{scen['C']}<br>**D:** %{scen['D']} | **E:** %{scen['E']} | **Boş:** %{scen['BOS']}", unsafe_allow_html=True)
                                 st.markdown("<hr style='margin-top: 10px; margin-bottom: 10px;'>", unsafe_allow_html=True)
                                 st.metric("Hedef Değer", format_tr(scen_guncel_hedef))
+                                
+                                # EXCEL İNDİR BUTONU
                                 st.download_button(
-                                    label="📥 Raporu İndir (Excel)",
+                                    label="📥 Excel Raporu (.xlsx)",
                                     data=excel_data,
-                                    file_name=f"BEK_Senaryo_{idx_i+1}_{int(scen_guncel_hedef)}_TL.xlsx",
+                                    file_name=f"Senaryo_{idx_i+1}.xlsx",
                                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                    key=f"dl_{idx_i}"
+                                    key=f"dl_excel_{idx_i}"
+                                )
+                                # SAP TXT İNDİR BUTONU
+                                st.download_button(
+                                    label="⚙️ SAP Formatı (.txt)",
+                                    data=txt_data,
+                                    file_name=f"Senaryo_{idx_i+1}.txt",
+                                    mime="text/plain",
+                                    key=f"dl_txt_{idx_i}"
                                 )
 
                     st.markdown("<br>", unsafe_allow_html=True)
@@ -304,7 +341,7 @@ if check_password():
                         if idx_i >= len(selected_scenarios): continue
                         scen = selected_scenarios[idx_i]
                         
-                        df_export = df[['Ürün Kodu', 'Ürün', pareto_col_name, 'Emniyet Seviyesi', 'Min TL', 'Optimum TL', 'Hedef TL', 'Stok TL', 'Fazla TL']].copy()
+                        df_export = df[cols_to_pull].copy()
                         level_map_scen = {'A': scen['A'], 'B': scen['B'], 'C': scen['C'], 'D': scen['D'], 'E': scen['E'], 'BOŞ': scen['BOS']}
                         
                         df_export['Yeni_Emniyet_Seviyesi'] = df['Temiz_Pareto'].map(level_map_scen).fillna(scen['BOS'])
@@ -317,10 +354,12 @@ if check_password():
                         df_export['Yeni Hedef Değer'] = df_export['Yeni Optimum TL'] + df_export['Yeni Fazla TL']
                         
                         scen_guncel_hedef = df_export['Yeni Hedef Değer'].sum()
+                        
                         excel_data = create_formatted_excel(df_export, money_cols)
+                        txt_data = create_sap_txt(df_export, org_col_name)
                         
                         with row2[idx_i - 4]:
-                            with st.container(border=True): # KART KUTUSU
+                            with st.container(border=True): 
                                 st.subheader(p_indices[idx_i])
                                 st.markdown(f"**A:** %{scen['A']} | **B:** %{scen['B']} | **C:** %{scen['C']}<br>**D:** %{scen['D']} | **E:** %{scen['E']} | **Boş:** %{scen['BOS']}", unsafe_allow_html=True)
                                 st.markdown("<hr style='margin-top: 10px; margin-bottom: 10px;'>", unsafe_allow_html=True)
@@ -329,11 +368,18 @@ if check_password():
                                 st.metric("Hedef Değer", format_tr(scen_guncel_hedef), delta=f"{format_tr(abs(delta_val))} Fark", delta_color="inverse" if delta_val > 0 else "normal")
                                 
                                 st.download_button(
-                                    label="📥 Raporu İndir (Excel)",
+                                    label="📥 Excel Raporu (.xlsx)",
                                     data=excel_data,
-                                    file_name=f"BEK_Senaryo_{idx_i+1}_{int(scen_guncel_hedef)}_TL.xlsx",
+                                    file_name=f"Senaryo_{idx_i+1}.xlsx",
                                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                    key=f"dl_{idx_i}"
+                                    key=f"dl_excel_{idx_i}"
+                                )
+                                st.download_button(
+                                    label="⚙️ SAP Formatı (.txt)",
+                                    data=txt_data,
+                                    file_name=f"Senaryo_{idx_i+1}.txt",
+                                    mime="text/plain",
+                                    key=f"dl_txt_{idx_i}"
                                 )
 
         except Exception as e:
