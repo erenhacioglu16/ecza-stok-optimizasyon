@@ -13,6 +13,12 @@ def format_tr(val):
     s = f"{val:,.0f}"
     return s.replace(",", ".") + " ₺"
 
+# %99 Dahil Edilmiş Genişletilmiş Seçenekler
+options_ui = [50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 99]
+
+def safe_index(val, default=90):
+    return options_ui.index(val) if val in options_ui else options_ui.index(default)
+
 # Session State Varsayılan Değerlerini İlklendirme
 default_states = {
     "level_A": 90, "level_B": 85, "level_C": 80, "level_D": 75, "level_E": 70, "level_BOS": 50,
@@ -74,7 +80,7 @@ if check_password():
                 pareto_series = pd.Series(['BOŞ'] * len(df), index=df.index)
             df['Temiz_Pareto'] = pareto_series
 
-            # Ortak Z-Score (I Sütunu) ve Farkların Excel mantığıyla ön hesaplaması
+            # Ortak Z-Score ve Farkların Ön Hesaplaması
             old_levels_all = df['Emniyet Seviyesi'].clip(50, 99) / 100.0
             z_old_all = old_levels_all.apply(lambda p: NormalDist().inv_cdf(p))
             z_old_all = np.where(z_old_all == 0, 1e-5, z_old_all)
@@ -83,19 +89,17 @@ if check_password():
             st.success(f"✅ **{uploaded_file.name}** veritabanına başarıyla aktarıldı.")
             
             # ---------------------------------------------------------
-            # YÖNETİCİ ÖZETİ - GÜNCEL DURUM (KPI PANOLARI)
+            # YÖNETİCİ ÖZETİ - GÜNCEL DURUM
             # ---------------------------------------------------------
             st.markdown("---")
             st.markdown("### 📌 Yönetici Özeti: Mevcut Envanter Durumu")
             
-            # Toplam hesaplamalar
             mevcut_optimum_toplam = df['Optimum TL'].sum()
             mevcut_fazla_toplam = df['Fazla TL'].sum()
             mevcut_stok_toplam = df['Stok TL'].sum()
             mevcut_hedef_toplam = df['Hedef TL'].sum()
             mevcut_min_toplam = df['Min TL'].sum()
             
-            # Kritik KPI formülleri
             guncel_hedef_deger = mevcut_optimum_toplam + mevcut_fazla_toplam
             stok_hedef_farki = mevcut_stok_toplam - guncel_hedef_deger
             
@@ -132,7 +136,7 @@ if check_password():
                     run_analysis = st.button("🔍 Senaryoları Analiz Et ve Getir", use_container_width=True)
 
                 if run_analysis:
-                    # Vektörel Hızlandırılmış Simülasyon Altyapısı (Yeni Hedef Değer = Opt + Fazla için)
+                    # Hızlı Vektörel Altyapı
                     min_div_z_arr = np.where(df['Emniyet Seviyesi'] <= 50, 0, df['Min TL'] / z_old_all)
                     fark_arr = df['Hedef_Min_Fark'].values
                     stok_arr = df['Stok TL'].values
@@ -145,16 +149,17 @@ if check_password():
                     fark_m = [fark_arr[m] for m in masks]
                     stok_m = [stok_arr[m] for m in masks]
                     
-                    z_dict = {val: NormalDist().inv_cdf(val/100.0) for val in range(50, 100, 5)}
-                    options_5 = list(range(50, 100, 5))
+                    z_dict = {val: NormalDist().inv_cdf(val/100.0) for val in options_ui}
+                    options_bos = [50, 60, 70, 80, 90, 95, 99]
                     
+                    # 99 dahil dinamik senaryo üretimi (Esneklik için fark toleransı 20'ye çıkarıldı)
                     combos = []
-                    for A in options_5:
-                        for B in [x for x in options_5 if x <= A and A - x <= 15]:
-                            for C in [x for x in options_5 if x <= B and B - x <= 15]:
-                                for D in [x for x in options_5 if x <= C and C - x <= 15]:
-                                    for E in [x for x in options_5 if x <= D and D - x <= 15]:
-                                        for BOS in [50, 55, 60, 65, 70, 75, 80, 85, 90, 95]:
+                    for A in options_ui:
+                        for B in [x for x in options_ui if x <= A and A - x <= 20]:
+                            for C in [x for x in options_ui if x <= B and B - x <= 20]:
+                                for D in [x for x in options_ui if x <= C and C - x <= 20]:
+                                    for E in [x for x in options_ui if x <= D and D - x <= 20]:
+                                        for BOS in options_bos:
                                             combos.append((A, B, C, D, E, BOS))
 
                     results = []
@@ -163,7 +168,6 @@ if check_password():
                         total_opt = 0
                         total_fazla = 0
                         
-                        # Her grup için hızlı numpy hesaplaması
                         for i in range(6):
                             y_min = min_div_z_m[i] * z_vals[i]
                             y_hedef = y_min + fark_m[i]
@@ -171,31 +175,49 @@ if check_password():
                             total_opt += np.sum(y_opt)
                             total_fazla += np.sum(np.maximum(0, stok_m[i] - y_hedef))
                         
-                        # YENİ HEDEF DEĞER (OPT + FAZLA) KONTROLÜ
                         target_budget = total_opt + total_fazla
                         results.append({'budget': target_budget, 'A': A, 'B': B, 'C': C, 'D': D, 'E': E, 'BOS': BOS})
 
-                    valid_res = [r for r in results if r['budget'] <= analiz_butce * 1.02]
-                    valid_res.sort(key=lambda x: x['budget'])
-                    if not valid_res:
-                        valid_res = sorted(results, key=lambda x: x['budget'])[:5]
+                    # DEĞER BAZLI (BÜTÇE HEDEFİNE GÖRE) SEÇİM ALGORİTMASI
+                    min_b = min([r['budget'] for r in results])
+                    max_possible_budget = max([r['budget'] for r in results])
+                    actual_target = min(analiz_butce, max_possible_budget) # Kullanıcı çok uçuk rakam girerse diye koruma
+                    
+                    # Hedef dağılım noktaları (4 numara hedefin %92'sine vuracak)
+                    target_points = [
+                        min_b,                                         # 1. Minimum
+                        min_b + (actual_target - min_b) * 0.50,        # 2. Orta-Alt
+                        min_b + (actual_target - min_b) * 0.75,        # 3. Standart
+                        min_b + (actual_target - min_b) * 0.92,        # 4. Yüksek (Hedefe çok yakın)
+                        actual_target                                  # 5. Tam Limit
+                    ]
+                    
+                    selected_scenarios = []
+                    seen_keys = set()
+                    
+                    for tp in target_points:
+                        # Bu hedefe en yakın olanları bul
+                        sorted_by_dist = sorted(results, key=lambda x: abs(x['budget'] - tp))
+                        for cand in sorted_by_dist:
+                            cand_key = (cand['A'], cand['B'], cand['C'], cand['D'], cand['E'], cand['BOS'])
+                            # Aynı senaryoyu 2 kere getirme ve limiti absürt aşma
+                            if cand_key not in seen_keys and cand['budget'] <= analiz_butce * 1.01:
+                                selected_scenarios.append(cand)
+                                seen_keys.add(cand_key)
+                                break
 
-                    n_res = len(valid_res)
                     p_indices = [
-                        ("1️⃣ Tasarruf Odaklı (Düşük)", 0),
-                        ("2️⃣ Ekonomik Dengeli", int(n_res * 0.25)),
-                        ("3️⃣ Standart Optimal", int(n_res * 0.50)),
-                        ("4️⃣ Yüksek Hizmet", int(n_res * 0.75)),
-                        ("5️⃣ Bütçeye En Yakın", n_res - 1)
+                        "1️⃣ Tasarruf Odaklı (Düşük)",
+                        "2️⃣ Ekonomik Dengeli",
+                        "3️⃣ Standart Optimal",
+                        "4️⃣ Yüksek Hizmet",
+                        "5️⃣ Bütçeye En Yakın Limit"
                     ]
 
                     st.markdown("#### 🎯 Analiz Edilen Örnek Pareto Hizmet Senaryoları")
                     s_cols = st.columns(5)
                     
-                    for idx_i, (s_title, s_idx) in enumerate(p_indices):
-                        s_idx = min(s_idx, n_res - 1)
-                        scen = valid_res[s_idx]
-                        
+                    for idx_i, scen in enumerate(selected_scenarios):
                         level_map_scen = {'A': scen['A'], 'B': scen['B'], 'C': scen['C'], 'D': scen['D'], 'E': scen['E'], 'BOŞ': scen['BOS']}
                         scen_emniyet = df['Temiz_Pareto'].map(level_map_scen).fillna(scen['BOS']) / 100.0
                         z_new_scen = scen_emniyet.apply(lambda p: NormalDist().inv_cdf(p))
@@ -207,10 +229,9 @@ if check_password():
                         scen_guncel_hedef = scen_yeni_optimum.sum() + scen_yeni_fazla.sum()
                         
                         with s_cols[idx_i]:
-                            st.subheader(s_title)
+                            st.subheader(p_indices[idx_i])
                             st.markdown(f"**A:** %{scen['A']} | **B:** %{scen['B']} | **C:** %{scen['C']}<br>**D:** %{scen['D']} | **E:** %{scen['E']} | **Boş:** %{scen['BOS']}", unsafe_allow_html=True)
                             st.markdown("---")
-                            # Senaryo kartında ana metrik Opt+Fazla olarak değiştirildi
                             st.metric("🎯 Yeni Hedef Değer", format_tr(scen_guncel_hedef), help="Yeni Optimum TL + Yeni Fazla TL")
                             st.metric("⚖️ Yeni Optimum TL", format_tr(scen_yeni_optimum.sum()))
                             st.metric("⚠️ Yeni Fazla TL", format_tr(scen_yeni_fazla.sum()))
@@ -225,7 +246,6 @@ if check_password():
                                 st.rerun()
 
             # --- 4. HEDEF BÜTÇE VE PARETO SEÇİM FORMU ---
-            options_5 = list(range(50, 100, 5))
             with st.form(key="butce_hesaplama_formu"):
                 st.markdown("### 🛠️ 2. Stratejik Planlama: Hizmet Seviyelerini Belirle")
                 
@@ -239,12 +259,12 @@ if check_password():
                 
                 st.markdown("**ABC/Pareto Sınıflarına Göre Hizmet (Emniyet) Seviyeleri (%):**")
                 p1, p2, p3, p4, p5, p6 = st.columns(6)
-                with p1: level_A = st.selectbox("A Sınıfı", options_5, index=options_5.index(st.session_state.get("level_A", 90)))
-                with p2: level_B = st.selectbox("B Sınıfı", options_5, index=options_5.index(st.session_state.get("level_B", 85)))
-                with p3: level_C = st.selectbox("C Sınıfı", options_5, index=options_5.index(st.session_state.get("level_C", 80)))
-                with p4: level_D = st.selectbox("D Sınıfı", options_5, index=options_5.index(st.session_state.get("level_D", 75)))
-                with p5: level_E = st.selectbox("E Sınıfı", options_5, index=options_5.index(st.session_state.get("level_E", 70)))
-                with p6: level_BOS = st.selectbox("Tanımsız Sınıf", options_5, index=options_5.index(st.session_state.get("level_BOS", 50)))
+                with p1: level_A = st.selectbox("A Sınıfı", options_ui, index=safe_index(st.session_state.get("level_A", 90)))
+                with p2: level_B = st.selectbox("B Sınıfı", options_ui, index=safe_index(st.session_state.get("level_B", 85)))
+                with p3: level_C = st.selectbox("C Sınıfı", options_ui, index=safe_index(st.session_state.get("level_C", 80)))
+                with p4: level_D = st.selectbox("D Sınıfı", options_ui, index=safe_index(st.session_state.get("level_D", 75)))
+                with p5: level_E = st.selectbox("E Sınıfı", options_ui, index=safe_index(st.session_state.get("level_E", 70)))
+                with p6: level_BOS = st.selectbox("Tanımsız Sınıf", options_ui, index=safe_index(st.session_state.get("level_BOS", 50)))
                 
                 st.markdown("<br>", unsafe_allow_html=True)
                 form_submitted = st.form_submit_button("🚀 Senaryoyu Hesapla ve Uygula", use_container_width=True)
@@ -256,7 +276,7 @@ if check_password():
                     "hedef_butce": hedef_butce_input, "form_submitted": True
                 })
 
-            # --- 5. HESAPLAMA VE SONUÇ EKRANI (TEDARİK ZİNCİRİ ÖZETİ) ---
+            # --- 5. HESAPLAMA VE SONUÇ EKRANI ---
             if st.session_state["form_submitted"]:
                 level_map = {
                     'A': st.session_state["level_A"], 'B': st.session_state["level_B"],
@@ -274,11 +294,9 @@ if check_password():
                 df['Yeni Optimum TL'] = (df['Yeni Min TL'] + df['Yeni Hedef TL']) / 2.0
                 df['Yeni Fazla TL'] = np.maximum(0, df['Stok TL'] - df['Yeni Hedef TL'])
                 
-                # --- YENİ TEDARİK KPI HESAPLARI ---
                 yeni_toplam_optimum = df['Yeni Optimum TL'].sum()
                 yeni_toplam_fazla = df['Yeni Fazla TL'].sum()
                 
-                # GÜNCEL KONTROL MATEMATİĞİ (Optimum + Fazla)
                 yeni_hedef_deger = yeni_toplam_optimum + yeni_toplam_fazla
                 yeni_stok_hedef_farki = mevcut_stok_toplam - yeni_hedef_deger
                 yeni_toplam_hedef = df['Yeni Hedef TL'].sum()
@@ -296,7 +314,6 @@ if check_password():
                 
                 st.markdown("<br>", unsafe_allow_html=True)
                 
-                # BÜTÇE KONTROLÜ (Artık yeni_hedef_deger yani Opt+Fazla ile kıyaslanıyor)
                 aktuel_butce = st.session_state["hedef_butce"]
                 fark_butce = aktuel_butce - yeni_hedef_deger
                 if fark_butce >= 0:
@@ -304,7 +321,6 @@ if check_password():
                 else:
                     st.error(f"🔴 **BÜTÇE AŞILDI:** Kurguladığınız **Yeni Hedef Değer ({format_tr(yeni_hedef_deger)})**, belirlediğiniz **{format_tr(aktuel_butce)}** sınırını **{format_tr(abs(fark_butce))}** tutarında aşmaktadır! Hizmet seviyelerini düşürünüz.")
                 
-                # Sütun halinde alt metrikler
                 k1, k2, k3, k4 = st.columns(4)
                 k1.metric("Yeni Hedef TL (Sistem)", format_tr(yeni_toplam_hedef))
                 k2.metric("Yeni Min TL", format_tr(df['Yeni Min TL'].sum()))
