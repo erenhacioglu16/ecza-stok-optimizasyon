@@ -7,36 +7,18 @@ import io
 # --- SAYFA YAPILANDIRMASI VE TÜRKÇE FORMAT FONKSİYONU ---
 st.set_page_config(page_title="Stok & Bütçe Optimizasyon Paneli", layout="wide", initial_sidebar_state="collapsed")
 
-# KPI'lar için düz (küsüratsız) format
 def format_tr(val):
     if pd.isna(val) or val == 0:
         return "0 ₺"
     s = f"{val:,.0f}"
     return s.replace(",", ".") + " ₺"
 
-# Tablo içi için küsüratlı, noktalı-virgüllü format (Örn: 1.234.567,89)
-def table_format_tr(val):
-    if pd.isna(val): return ""
-    try:
-        s = f"{val:,.2f}"
-        return s.replace(",", "X").replace(".", ",").replace("X", ".")
-    except:
-        return val
-
 # %99 Dahil Edilmiş Genişletilmiş Seçenekler
 options_ui = [50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 99]
 
-def safe_index(val, default=90):
-    return options_ui.index(val) if val in options_ui else options_ui.index(default)
-
-# Session State Varsayılan Değerlerini İlklendirme
-default_states = {
-    "level_A": 90, "level_B": 85, "level_C": 80, "level_D": 75, "level_E": 70, "level_BOS": 99,
-    "hedef_butce": 6200000000
-}
-for key, val in default_states.items():
-    if key not in st.session_state:
-        st.session_state[key] = val
+# Session State
+if "hedef_butce" not in st.session_state:
+    st.session_state["hedef_butce"] = 6200000000
 
 # --- 1. ŞİFRE EKRANI ---
 def check_password():
@@ -55,9 +37,30 @@ def check_password():
         return False
     return True
 
+# --- EXCEL OLUŞTURMA FONKSİYONU (NOKTALI VİRGÜLLÜ FORMAT İLE) ---
+def create_formatted_excel(df_export, cols_to_format):
+    buffer = io.BytesIO()
+    # xlsxwriter engine kullanarak Excel formatlarını hücrelere gömüyoruz
+    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+        df_export.to_excel(writer, index=False, sheet_name='Senaryo_Sonucu')
+        
+        workbook  = writer.book
+        worksheet = writer.sheets['Senaryo_Sonucu']
+        
+        # Türkçe Finansal Format: 1.234.567,89 ₺ (Excel bunu sistem diline göre uyarlar)
+        money_format = workbook.add_format({'num_format': '#,##0.00 "₺"'})
+        
+        for idx, col_name in enumerate(df_export.columns):
+            if col_name in cols_to_format:
+                worksheet.set_column(idx, idx, 18, money_format) # Parasal sütunları genişlet ve formatla
+            else:
+                worksheet.set_column(idx, idx, 15) # Diğer sütunlar standart genişlik
+                
+    return buffer.getvalue()
+
 if check_password():
     st.title("📊 Envanter & Bütçe Optimizasyon Paneli")
-    st.markdown("Stok parametrelerinizi analiz edin, kademeli hizmet seviyesi senaryoları kurgulayın ve bütçenizi kontrol altına alın.")
+    st.markdown("Stok parametrelerinizi analiz edin, senaryoları inceleyin ve dilediğiniz senaryoyu tek tıkla **hazır formatlanmış Excel** olarak indirin.")
     
     # --- 2. DOSYA YÜKLEME ---
     st.markdown("### 📄 1. Veri Yükleme")
@@ -72,7 +75,7 @@ if check_password():
             engine_choice = 'pyxlsb' if uploaded_file.name.endswith('.xlsb') else None
             df = pd.read_excel(uploaded_file, sheet_name='Stok seviyesi', skiprows=6, engine=engine_choice)
             
-            # Sütun temizliği
+            # Sütun isimlerini ve sayısal verileri temizleme
             df.columns = df.columns.astype(str).str.strip()
             df = df.dropna(subset=['Ürün Kodu']).copy()
             
@@ -81,7 +84,7 @@ if check_password():
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
             
-            # Pareto Sütun tespiti ve Temizliği
+            # Pareto Sütun tespiti ve Boş/Tanımsız Temizliği
             pareto_col_name = 'Defa Pareto' if 'Defa Pareto' in df.columns else ('Defa ABC' if 'Defa ABC' in df.columns else None)
             if pareto_col_name:
                 pareto_series = df[pareto_col_name].fillna('BOŞ').astype(str).str.strip().str.upper()
@@ -90,7 +93,7 @@ if check_password():
                 pareto_series = pd.Series(['BOŞ'] * len(df), index=df.index)
             df['Temiz_Pareto'] = pareto_series
 
-            # Ortak Ön Hesaplamalar
+            # Ortak Z-Score ve Farkların Ön Hesaplaması
             old_levels_all = df['Emniyet Seviyesi'].clip(50, 99) / 100.0
             z_old_all = old_levels_all.apply(lambda p: NormalDist().inv_cdf(p))
             z_old_all = np.where(z_old_all == 0, 1e-5, z_old_all)
@@ -120,24 +123,28 @@ if check_password():
                 st.info(f"**Stok İle Hedef Değer Farkı**\n### {format_tr(stok_hedef_farki)}\n*(Stok TL - Güncel Hedef Değer)*")
             with kpi3:
                 st.info(f"**Mevcut Stok Değeri (Fiili)**\n### {format_tr(mevcut_stok_toplam)}\n*(Depodaki Toplam Stok)*")
-
             st.markdown("---")
 
-            # --- 3. AKILLI BÜTÇE & PARETO ÖNERİ ASİSTANI ---
-            with st.expander("💡 🤖 Bütçeye Göre Akıllı Pareto Öneri Asistanı (Kademeli & Bütçe Aşım Analizi)", expanded=False):
-                col_rec1, col_rec2 = st.columns([2, 1])
-                with col_rec1:
-                    analiz_butce = st.number_input(
-                        "Analiz Edilecek Hedef Bütçe Sınırı (TL):",
-                        value=int(st.session_state["hedef_butce"]),
-                        step=50000000, format="%d", key="analiz_butce_input"
-                    )
-                with col_rec2:
-                    st.write("")
-                    st.write("")
-                    run_analysis = st.button("🔍 Kademeli 8 Senaryoyu Analiz Et ve Getir", use_container_width=True)
+            # --- 3. AKILLI BÜTÇE & PARETO ÖNERİ ASİSTANI (DİREKT EXCEL İNDİRMELİ) ---
+            st.markdown("### 💡 🤖 Bütçeye Göre Akıllı Pareto Öneri Asistanı")
+            st.markdown("Analiz edilen senaryolardan size en uygun olanının altındaki butona tıklayarak sonuçları doğrudan Excel olarak indirebilirsiniz.")
+            
+            col_rec1, col_rec2 = st.columns([2, 1])
+            with col_rec1:
+                analiz_butce = st.number_input(
+                    "Hedeflediğiniz Bütçe Sınırını Girin (TL):",
+                    value=int(st.session_state["hedef_butce"]),
+                    step=50000000, format="%d"
+                )
+            with col_rec2:
+                st.write("")
+                st.write("")
+                run_analysis = st.button("🔍 8 Kademeli Senaryoyu Analiz Et", use_container_width=True)
 
-                if run_analysis:
+            if run_analysis:
+                st.session_state["hedef_butce"] = analiz_butce
+                
+                with st.spinner("Milyonlarca ihtimal taranıyor, pürüzsüz senaryolar ve Excel dosyaları hazırlanıyor... Lütfen bekleyin."):
                     min_div_z_arr = np.where(df['Emniyet Seviyesi'] <= 50, 0, df['Min TL'] / z_old_all)
                     fark_arr = df['Hedef_Min_Fark'].values
                     stok_arr = df['Stok TL'].values
@@ -201,135 +208,93 @@ if check_password():
                             selected_scenarios.append(best_smooth)
                             seen_keys.add((best_smooth['A'], best_smooth['B'], best_smooth['C'], best_smooth['D'], best_smooth['E'], best_smooth['BOS']))
 
-                    p_indices = ["1️⃣ Tasarruf (Minimum)", "2️⃣ Ekonomik Alt", "3️⃣ Ekonomik Üst", "4️⃣ Yüksek Hizmet", "5️⃣ Bütçe Sınırı (Hedef)", "6️⃣ Bütçe Aşımı (%2)", "7️⃣ Bütçe Aşımı (%5)", "8️⃣ Max Fırsat (%10)"]
+                    p_indices = ["1️⃣ Tasarruf (Min)", "2️⃣ Ekonomik Alt", "3️⃣ Ekonomik Üst", "4️⃣ Yüksek Hizmet", "5️⃣ Bütçe Sınırı (Hedef)", "6️⃣ Bütçe Aşımı (%2)", "7️⃣ Bütçe Aşımı (%5)", "8️⃣ Max Fırsat (%10)"]
 
+                    # Excel dışa aktarımı için formatlanacak parasal sütunlar
+                    money_cols = ['Min TL', 'Optimum TL', 'Hedef TL', 'Stok TL', 'Fazla TL', 'Yeni Min TL', 'Yeni Optimum TL', 'Yeni Hedef TL', 'Yeni Fazla TL', 'Yeni Hedef Değer']
+                    
                     st.markdown("#### 🎯 Analiz Edilen 8 Farklı Kademeli Pareto Senaryosu")
                     
+                    # İLK SATIR (1-4)
                     st.markdown("##### 🟢 Hedef Bütçe İçi Senaryolar (Boş Gruplar %99 Koruma)")
                     row1 = st.columns(4)
                     for idx_i in range(4):
                         if idx_i >= len(selected_scenarios): continue
                         scen = selected_scenarios[idx_i]
+                        
+                        # Bu senaryo için satır bazlı hesaplamaların Excel'e dökülmesi
+                        df_export = df[['Ürün Kodu', 'Ürün', pareto_col_name, 'Emniyet Seviyesi', 'Min TL', 'Optimum TL', 'Hedef TL', 'Stok TL', 'Fazla TL']].copy()
+                        level_map_scen = {'A': scen['A'], 'B': scen['B'], 'C': scen['C'], 'D': scen['D'], 'E': scen['E'], 'BOŞ': scen['BOS']}
+                        
+                        df_export['Yeni_Emniyet_Seviyesi'] = df['Temiz_Pareto'].map(level_map_scen).fillna(scen['BOS'])
+                        z_new_scen = (df_export['Yeni_Emniyet_Seviyesi']/100.0).apply(lambda p: NormalDist().inv_cdf(p))
+                        
+                        df_export['Yeni Min TL'] = np.where(df['Emniyet Seviyesi'] <= 50, 0, df['Min TL'] * (z_new_scen / z_old_all))
+                        df_export['Yeni Hedef TL'] = df_export['Yeni Min TL'] + df['Hedef_Min_Fark']
+                        df_export['Yeni Optimum TL'] = (df_export['Yeni Min TL'] + df_export['Yeni Hedef TL']) / 2.0
+                        df_export['Yeni Fazla TL'] = np.maximum(0, df['Stok TL'] - df_export['Yeni Hedef TL'])
+                        df_export['Yeni Hedef Değer'] = df_export['Yeni Optimum TL'] + df_export['Yeni Fazla TL'] # İstenen extra sütun
+                        
+                        scen_guncel_hedef = df_export['Yeni Hedef Değer'].sum()
+                        excel_data = create_formatted_excel(df_export, money_cols)
+                        
                         with row1[idx_i]:
                             st.subheader(p_indices[idx_i])
                             st.markdown(f"**A:** %{scen['A']} | **B:** %{scen['B']} | **C:** %{scen['C']}<br>**D:** %{scen['D']} | **E:** %{scen['E']} | **Boş:** %{scen['BOS']}", unsafe_allow_html=True)
                             st.markdown("---")
-                            st.metric("🎯 Yeni Hedef Değer", format_tr(scen['budget']))
-                            if st.button(f"✅ Bu Senaryoyu Seç", key=f"btn_scen_{idx_i}"):
-                                st.session_state.update({"level_A": scen['A'], "level_B": scen['B'], "level_C": scen['C'], "level_D": scen['D'], "level_E": scen['E'], "level_BOS": scen['BOS'], "hedef_butce": int(analiz_butce)})
-                                st.rerun()
+                            st.metric("🎯 Yeni Hedef Değer", format_tr(scen_guncel_hedef))
+                            st.metric("⚖️ Yeni Optimum TL", format_tr(df_export['Yeni Optimum TL'].sum()))
+                            st.metric("⚠️ Yeni Fazla TL", format_tr(df_export['Yeni Fazla TL'].sum()))
+                            
+                            st.download_button(
+                                label="📥 Excel Olarak İndir",
+                                data=excel_data,
+                                file_name=f"Senaryo_{idx_i+1}_{int(scen_guncel_hedef)}_TL.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                key=f"dl_{idx_i}"
+                            )
 
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    
+                    # İKİNCİ SATIR (5-8)
                     st.markdown("##### 🔴 Bütçe Limitine Yakın ve Limit Aşımı (Fırsat) Senaryoları")
                     row2 = st.columns(4)
                     for idx_i in range(4, 8):
                         if idx_i >= len(selected_scenarios): continue
                         scen = selected_scenarios[idx_i]
+                        
+                        df_export = df[['Ürün Kodu', 'Ürün', pareto_col_name, 'Emniyet Seviyesi', 'Min TL', 'Optimum TL', 'Hedef TL', 'Stok TL', 'Fazla TL']].copy()
+                        level_map_scen = {'A': scen['A'], 'B': scen['B'], 'C': scen['C'], 'D': scen['D'], 'E': scen['E'], 'BOŞ': scen['BOS']}
+                        
+                        df_export['Yeni_Emniyet_Seviyesi'] = df['Temiz_Pareto'].map(level_map_scen).fillna(scen['BOS'])
+                        z_new_scen = (df_export['Yeni_Emniyet_Seviyesi']/100.0).apply(lambda p: NormalDist().inv_cdf(p))
+                        
+                        df_export['Yeni Min TL'] = np.where(df['Emniyet Seviyesi'] <= 50, 0, df['Min TL'] * (z_new_scen / z_old_all))
+                        df_export['Yeni Hedef TL'] = df_export['Yeni Min TL'] + df['Hedef_Min_Fark']
+                        df_export['Yeni Optimum TL'] = (df_export['Yeni Min TL'] + df_export['Yeni Hedef TL']) / 2.0
+                        df_export['Yeni Fazla TL'] = np.maximum(0, df['Stok TL'] - df_export['Yeni Hedef TL'])
+                        df_export['Yeni Hedef Değer'] = df_export['Yeni Optimum TL'] + df_export['Yeni Fazla TL']
+                        
+                        scen_guncel_hedef = df_export['Yeni Hedef Değer'].sum()
+                        excel_data = create_formatted_excel(df_export, money_cols)
+                        
                         with row2[idx_i - 4]:
                             st.subheader(p_indices[idx_i])
                             st.markdown(f"**A:** %{scen['A']} | **B:** %{scen['B']} | **C:** %{scen['C']}<br>**D:** %{scen['D']} | **E:** %{scen['E']} | **Boş:** %{scen['BOS']}", unsafe_allow_html=True)
                             st.markdown("---")
-                            delta_val = float(scen['budget']) - float(analiz_butce)
-                            st.metric("🎯 Yeni Hedef Değer", format_tr(scen['budget']), delta=f"{format_tr(abs(delta_val))} Fark", delta_color="inverse" if delta_val > 0 else "normal")
-                            if st.button(f"✅ Bu Senaryoyu Seç", key=f"btn_scen_{idx_i}"):
-                                st.session_state.update({"level_A": scen['A'], "level_B": scen['B'], "level_C": scen['C'], "level_D": scen['D'], "level_E": scen['E'], "level_BOS": scen['BOS'], "hedef_butce": int(analiz_butce)})
-                                st.rerun()
-
-            # --- 4. HEDEF BÜTÇE VE PARETO SEÇİM FORMU (ANINDA TETİKLENİR) ---
-            st.markdown("### 🛠️ 2. Stratejik Planlama: Hizmet Seviyelerini Belirle")
-            
-            col_b1, col_b2 = st.columns([1, 1])
-            with col_b1:
-                ui_butce = st.number_input(
-                    "Yönetim Bütçe Sınırı / Hedef (TL):",
-                    value=int(st.session_state["hedef_butce"]), step=50000000, format="%d"
-                )
-            
-            st.markdown("**ABC/Pareto Sınıflarına Göre Hizmet (Emniyet) Seviyeleri (%):**")
-            p1, p2, p3, p4, p5, p6 = st.columns(6)
-            with p1: ui_A = st.selectbox("A Sınıfı", options_ui, index=safe_index(st.session_state["level_A"]))
-            with p2: ui_B = st.selectbox("B Sınıfı", options_ui, index=safe_index(st.session_state["level_B"]))
-            with p3: ui_C = st.selectbox("C Sınıfı", options_ui, index=safe_index(st.session_state["level_C"]))
-            with p4: ui_D = st.selectbox("D Sınıfı", options_ui, index=safe_index(st.session_state["level_D"]))
-            with p5: ui_E = st.selectbox("E Sınıfı", options_ui, index=safe_index(st.session_state["level_E"]))
-            with p6: ui_BOS = st.selectbox("Tanımsız Sınıf", options_ui, index=safe_index(st.session_state["level_BOS"]))
-            
-            if st.button("🚀 Senaryoyu Hesapla ve Uygula", use_container_width=True):
-                st.session_state.update({"level_A": ui_A, "level_B": ui_B, "level_C": ui_C, "level_D": ui_D, "level_E": ui_E, "level_BOS": ui_BOS, "hedef_butce": ui_butce})
-
-            # --- 5. HESAPLAMA VE SONUÇ EKRANI (HER ZAMAN GÜNCEL) ---
-            # Session state'deki güncel değerleri kullanarak hesapla
-            level_map = {
-                'A': st.session_state["level_A"], 'B': st.session_state["level_B"],
-                'C': st.session_state["level_C"], 'D': st.session_state["level_D"],
-                'E': st.session_state["level_E"], 'BOŞ': st.session_state["level_BOS"]
-            }
-            
-            df['Yeni_Emniyet_Seviyesi'] = df['Temiz_Pareto'].map(level_map).fillna(st.session_state["level_BOS"])
-            
-            new_levels = df['Yeni_Emniyet_Seviyesi'] / 100.0
-            z_new = new_levels.apply(lambda p: NormalDist().inv_cdf(p))
-            
-            df['Yeni Min TL'] = np.where(df['Emniyet Seviyesi'] <= 50, 0, df['Min TL'] * (z_new / z_old_all))
-            df['Yeni Hedef TL'] = df['Yeni Min TL'] + df['Hedef_Min_Fark']
-            df['Yeni Optimum TL'] = (df['Yeni Min TL'] + df['Yeni Hedef TL']) / 2.0
-            df['Yeni Fazla TL'] = np.maximum(0, df['Stok TL'] - df['Yeni Hedef TL'])
-            
-            yeni_toplam_optimum = df['Yeni Optimum TL'].sum()
-            yeni_toplam_fazla = df['Yeni Fazla TL'].sum()
-            
-            yeni_hedef_deger = yeni_toplam_optimum + yeni_toplam_fazla
-            yeni_stok_hedef_farki = mevcut_stok_toplam - yeni_hedef_deger
-            yeni_toplam_hedef = df['Yeni Hedef TL'].sum()
-            
-            st.markdown("---")
-            st.markdown("### 📈 3. Tedarik Zinciri & Senaryo Sonuçları")
-            
-            res1, res2, res3 = st.columns(3)
-            with res1:
-                st.success(f"**YENİ Hedef Değer (Kurgulanan)**\n### {format_tr(yeni_hedef_deger)}\n*(Yeni Optimum TL + Yeni Fazla TL)*")
-            with res2:
-                st.success(f"**YENİ Stok İle Hedef Değer Farkı**\n### {format_tr(yeni_stok_hedef_farki)}\n*(Stok TL - Yeni Hedef Değer)*")
-            with res3:
-                st.success(f"**YENİ Sistem Hedef TL (Taban Limit)**\n### {format_tr(yeni_toplam_hedef)}\n*(Senaryoya ait sistem hedef tabanı)*")
-            
-            st.markdown("<br>", unsafe_allow_html=True)
-            
-            aktuel_butce = st.session_state["hedef_butce"]
-            fark_butce = aktuel_butce - yeni_hedef_deger
-            if fark_butce >= 0:
-                st.success(f"🟢 **BÜTÇE UYGUN:** Kurguladığınız **Yeni Hedef Değer ({format_tr(yeni_hedef_deger)})**, belirlediğiniz **{format_tr(aktuel_butce)}** sınırının altındadır. *(Avantaj: {format_tr(fark_butce)})*")
-            else:
-                st.error(f"🔴 **BÜTÇE AŞILDI (OVER-BUDGET):** Kurguladığınız **Yeni Hedef Değer ({format_tr(yeni_hedef_deger)})**, belirlediğiniz **{format_tr(aktuel_butce)}** sınırını **{format_tr(abs(fark_butce))}** tutarında aşmaktadır!")
-            
-            # --- 7. TABLO GÖSTERİMİ VE İNDİRME ---
-            st.markdown("### 📋 4. Ürün Bazlı Operasyonel Detay Tablosu")
-            
-            gosterim_sutunlari = [
-                'Ürün Kodu', 'Ürün', pareto_col_name, 'Emniyet Seviyesi', 
-                'Min TL', 'Optimum TL', 'Hedef TL', 'Stok TL', 'Fazla TL',
-                'Yeni_Emniyet_Seviyesi', 'Yeni Min TL', 'Yeni Optimum TL', 'Yeni Hedef TL', 'Yeni Fazla TL'
-            ]
-            gosterim_sutunlari = [c for c in gosterim_sutunlari if c in df.columns or c == pareto_col_name]
-            
-            # Tablo gösterimi öncesi sütunları noktalı-virgüllü formata çevirme
-            df_gosterim = df[gosterim_sutunlari].copy()
-            for col in ['Min TL', 'Optimum TL', 'Hedef TL', 'Stok TL', 'Fazla TL', 'Yeni Min TL', 'Yeni Optimum TL', 'Yeni Hedef TL', 'Yeni Fazla TL']:
-                if col in df_gosterim.columns:
-                    df_gosterim[col] = df_gosterim[col].apply(table_format_tr)
-            
-            st.dataframe(df_gosterim, use_container_width=True)
-            
-            st.markdown("### 📥 5. Veri Dışa Aktarımı")
-            st.info("Aşağıdaki yeşil butona tıklayarak, içerisinde Pareto sınıflarının ve yeni/eski emniyet seviyelerinin olduğu gerçek bir Excel (**.xlsx**) dosyası indirebilirsiniz.")
-            excel_buffer = io.BytesIO()
-            with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                # İndirilecek excel ham sayı formatında olmalı ki sonrasında işlem yapılabilsin
-                df[gosterim_sutunlari].to_excel(writer, index=False, sheet_name='Stok_Optimizasyon_Sonucu')
-                
-            st.download_button(
-                label="🟢 Yeni Stok Senaryosunu Excel (.xlsx) Olarak İndir", data=excel_buffer.getvalue(),
-                file_name=f"Stok_Optimizasyon_{aktuel_butce}_TL.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+                            
+                            delta_val = float(scen_guncel_hedef) - float(analiz_butce)
+                            st.metric("🎯 Yeni Hedef Değer", format_tr(scen_guncel_hedef), delta=f"{format_tr(abs(delta_val))} Fark", delta_color="inverse" if delta_val > 0 else "normal")
+                            st.metric("⚖️ Yeni Optimum TL", format_tr(df_export['Yeni Optimum TL'].sum()))
+                            st.metric("⚠️ Yeni Fazla TL", format_tr(df_export['Yeni Fazla TL'].sum()))
+                            
+                            st.download_button(
+                                label="📥 Excel Olarak İndir",
+                                data=excel_data,
+                                file_name=f"Senaryo_{idx_i+1}_{int(scen_guncel_hedef)}_TL.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                key=f"dl_{idx_i}"
+                            )
 
         except Exception as e:
             st.error(f"Dosya işlenirken bir hata oluştu: {e}")
