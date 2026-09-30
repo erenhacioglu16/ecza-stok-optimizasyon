@@ -32,7 +32,6 @@ st.markdown("""
         background-color: #003366 !important;
         box-shadow: 0 4px 10px rgba(0,0,0,0.15);
     }
-    /* İndirme Butonu Özelleştirmesi (Excel & TXT) */
     .stDownloadButton>button {
         background-color: #27ae60 !important;
         color: white !important;
@@ -89,7 +88,7 @@ def check_password():
         return False
     return True
 
-# --- EXCEL & TXT OLUŞTURMA FONKSİYONLARI ---
+# --- EXCEL & TXT (SAP) OLUŞTURMA FONKSİYONLARI ---
 def create_formatted_excel(df_export, cols_to_format):
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
@@ -107,27 +106,35 @@ def create_formatted_excel(df_export, cols_to_format):
                 
     return buffer.getvalue()
 
-def create_sap_txt(df_export, org_col):
-    df_sap = pd.DataFrame()
+def create_sap_txt(df_export):
+    # Görseldeki 28 adet şube kodu (Tüm şubeler)
+    sube_listesi = [
+        "1100", "1101", "1104", "1105", "1106", "1107", "1108", "1109",
+        "1111", "1112", "1114", "1115", "1116", "1117", "1118", "1119",
+        "1121", "1123", "1124", "1125", "1126", "1127", "1128", "1129",
+        "1130", "1131", "1132",
+        "1194"
+    ]
     
-    # Küsürat/Boşluk Hatalarına Karşı Güvenli Format Çevirici
     def safe_format(val):
-        try:
-            return str(int(float(val)))
-        except:
-            return str(val).strip()
+        try: return str(int(float(val)))
+        except: return str(val).strip()
 
-    # Şube Kodu
-    if org_col in df_export.columns:
-        df_sap['SA_Org'] = df_export[org_col].apply(safe_format)
-    else:
-        df_sap['SA_Org'] = "1101" # Bulunamazsa varsayılan
-        
-    # Ürün Kodu ve Yeni Hizmet Seviyesi
-    df_sap['Urun'] = df_export['Ürün Kodu'].apply(safe_format)
-    df_sap['Seviye'] = df_export['Yeni_Emniyet_Seviyesi'].fillna(0).astype(int).astype(str)
+    # Sadece Ürün ve Seviye alınarak baz tablo oluşturuluyor
+    df_base = pd.DataFrame()
+    df_base['Urun'] = df_export['Ürün Kodu'].apply(safe_format)
+    df_base['Seviye'] = df_export['Yeni_Emniyet_Seviyesi'].fillna(0).astype(int).astype(str)
     
-    # Başlıksız (Header=False) ve TAB ile ayrılarak dışa aktarım (SAP Standardı)
+    # Şubeler DataFrame'e çevriliyor
+    df_sube = pd.DataFrame({'SA_Org': sube_listesi})
+    
+    # Cross Join (Her ürün için tüm şubeler kopyalanır)
+    df_sap = df_base.merge(df_sube, how='cross')
+    
+    # İstenen sütun sırası: Şube Kodu | Ürün Kodu | Hizmet Seviyesi
+    df_sap = df_sap[['SA_Org', 'Urun', 'Seviye']]
+    
+    # SAP formatı (Başlıksız, Tab ile ayrılmış TXT)
     buffer = io.StringIO()
     df_sap.to_csv(buffer, sep='\t', index=False, header=False)
     return buffer.getvalue().encode('utf-8')
@@ -164,9 +171,6 @@ if check_password():
             else:
                 pareto_series = pd.Series(['BOŞ'] * len(df), index=df.index)
             df['Temiz_Pareto'] = pareto_series
-            
-            # Şube / Org Kodu tespiti (SAP için)
-            org_col_name = 'SA Org. Ko' if 'SA Org. Ko' in df.columns else 'Şube Kodu'
 
             old_levels_all = df['Emniyet Seviyesi'].clip(50, 99) / 100.0
             z_old_all = old_levels_all.apply(lambda p: NormalDist().inv_cdf(p))
@@ -277,11 +281,7 @@ if check_password():
 
                     p_indices = ["1. Tasarruf (Min)", "2. Ekonomik Alt", "3. Ekonomik Üst", "4. Yüksek Hizmet", "5. Bütçe Sınırı", "6. Bütçe Aşımı (%2)", "7. Bütçe Aşımı (%5)", "8. Max Fırsat (%10)"]
                     money_cols = ['Min TL', 'Optimum TL', 'Hedef TL', 'Stok TL', 'Fazla TL', 'Yeni Min TL', 'Yeni Optimum TL', 'Yeni Hedef TL', 'Yeni Fazla TL', 'Yeni Hedef Değer']
-                    
-                    # Dışa aktarılacak temel sütunlar listesi
                     cols_to_pull = ['Ürün Kodu', 'Ürün', pareto_col_name, 'Emniyet Seviyesi', 'Min TL', 'Optimum TL', 'Hedef TL', 'Stok TL', 'Fazla TL']
-                    if org_col_name in df.columns:
-                        cols_to_pull.insert(0, org_col_name) # SAP için Şube kodu varsa ekle
                     
                     st.markdown("<br><h4>📑 Analiz Edilen Stratejik Senaryolar</h4>", unsafe_allow_html=True)
                     
@@ -305,9 +305,8 @@ if check_password():
                         
                         scen_guncel_hedef = df_export['Yeni Hedef Değer'].sum()
                         
-                        # Dosya Üretimleri
                         excel_data = create_formatted_excel(df_export, money_cols)
-                        txt_data = create_sap_txt(df_export, org_col_name)
+                        txt_data = create_sap_txt(df_export)
                         
                         with row1[idx_i]:
                             with st.container(border=True): 
@@ -316,15 +315,13 @@ if check_password():
                                 st.markdown("<hr style='margin-top: 10px; margin-bottom: 10px;'>", unsafe_allow_html=True)
                                 st.metric("Hedef Değer", format_tr(scen_guncel_hedef))
                                 
-                                # EXCEL İNDİR BUTONU
                                 st.download_button(
-                                    label="📥 Excel Raporu (.xlsx)",
+                                    label="📥 Rapor (.xlsx)",
                                     data=excel_data,
                                     file_name=f"Senaryo_{idx_i+1}.xlsx",
                                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                     key=f"dl_excel_{idx_i}"
                                 )
-                                # SAP TXT İNDİR BUTONU
                                 st.download_button(
                                     label="⚙️ SAP Formatı (.txt)",
                                     data=txt_data,
@@ -356,7 +353,7 @@ if check_password():
                         scen_guncel_hedef = df_export['Yeni Hedef Değer'].sum()
                         
                         excel_data = create_formatted_excel(df_export, money_cols)
-                        txt_data = create_sap_txt(df_export, org_col_name)
+                        txt_data = create_sap_txt(df_export)
                         
                         with row2[idx_i - 4]:
                             with st.container(border=True): 
@@ -368,7 +365,7 @@ if check_password():
                                 st.metric("Hedef Değer", format_tr(scen_guncel_hedef), delta=f"{format_tr(abs(delta_val))} Fark", delta_color="inverse" if delta_val > 0 else "normal")
                                 
                                 st.download_button(
-                                    label="📥 Excel Raporu (.xlsx)",
+                                    label="📥 Rapor (.xlsx)",
                                     data=excel_data,
                                     file_name=f"Senaryo_{idx_i+1}.xlsx",
                                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
